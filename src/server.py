@@ -78,57 +78,26 @@ for handler in logger.handlers:
 
 app = FastAPI()
 
-# Get API keys from environment
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# Get preferred provider (default to google)
-PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "google").lower()
-
-# Get model mapping configuration from environment
-# Default to latest Gemini models if not set
-BIG_MODEL = os.environ.get("BIG_MODEL", "gemini-2.5-pro-preview-03-25")
-SMALL_MODEL = os.environ.get("SMALL_MODEL", "gemini-2.0-flash")
-
 # AIplatform (Thomson Reuters) credentials
-AIPLATFORM_ENABLED = PREFERRED_PROVIDER == "aiplatform"
 aiplatform_project_id = None
 aiplatform_location = None 
 aiplatform_credentials = None
 
-# Try to initialize AIplatform credentials if it's the preferred provider
-if AIPLATFORM_ENABLED:
-    try:
-        aiplatform_project_id, aiplatform_location, aiplatform_credentials = get_gemini_credentials()
-        logging.info(f"Successfully initialized AIplatform credentials for project {aiplatform_project_id} in {aiplatform_location}")
-    except AuthenticationError as e:
-        logging.error(f"Failed to initialize AIplatform credentials: {e}")
-        logging.warning("Falling back to standard Gemini API key authentication")
-        AIPLATFORM_ENABLED = False
-    except Exception as e:
-        logging.error(f"Unexpected error initializing AIplatform credentials: {e}")
-        logging.warning("Falling back to standard Gemini API key authentication")
-        AIPLATFORM_ENABLED = False
+# Initialize AIplatform credentials
+try:
+    aiplatform_project_id, aiplatform_location, aiplatform_credentials = get_gemini_credentials()
+    logging.info(f"Successfully initialized AIplatform credentials for project {aiplatform_project_id} in {aiplatform_location}")
+except AuthenticationError as e:
+    logging.error(f"Failed to initialize AIplatform credentials: {e}")
+    raise  # Fail immediately if we can't get credentials - AIplatform is our only provider
+except Exception as e:
+    logging.error(f"Unexpected error initializing AIplatform credentials: {e}")
+    raise  # Fail immediately if we can't get credentials - AIplatform is our only provider
 
-# List of OpenAI models
-OPENAI_MODELS = [
-    "o3-mini",
-    "o1",
-    "o1-mini",
-    "o1-pro",
-    "gpt-4.5-preview",
-    "gpt-4o",
-    "gpt-4o-audio-preview",
-    "chatgpt-4o-latest",
-    "gpt-4o-mini",
-    "gpt-4o-mini-audio-preview"
-]
-
-# List of Gemini models
-GEMINI_MODELS = [
-    "gemini-2.5-pro-preview-03-25",
-    "gemini-2.0-flash"
+# List of supported AIplatform models
+AIPLATFORM_MODELS = [
+    "gemini-2.5-pro-preview-03-25",  # Main model for high-quality outputs
+    "gemini-2.0-flash",              # Faster, smaller model for simpler queries
 ]
 
 # Helper function to clean schema for Gemini
@@ -153,6 +122,10 @@ def clean_gemini_schema(schema: Any) -> Any:
         # Recursively clean items in a list
         return [clean_gemini_schema(item) for item in schema]
     return schema
+
+# Import Vertex AI components
+import vertexai
+from vertexai.generative_models import GenerativeModel, ChatSession
 
 # Models for Anthropic API requests
 class ContentBlockText(BaseModel):
@@ -211,9 +184,9 @@ class MessagesRequest(BaseModel):
         original_model = v
         new_model = v # Default to original value
 
-        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}'")
+        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}'")
 
-        # Remove provider prefixes for easier matching
+        # Extract model name, removing any provider prefix
         clean_v = v
         if clean_v.startswith('anthropic/'):
             clean_v = clean_v[10:]
@@ -223,54 +196,37 @@ class MessagesRequest(BaseModel):
             clean_v = clean_v[7:]
         elif clean_v.startswith('aiplatform/'):
             clean_v = clean_v[11:]
+        elif clean_v.startswith('claude-'):  # Directly detect Claude models without prefix
+            pass
 
-        # --- Mapping Logic --- START ---
+        # --- Mapping Logic ---
         mapped = False
-        # Map Haiku to SMALL_MODEL based on provider preference
+        
+        # Map Claude models to corresponding AIplatform models
         if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"aiplatform/{SMALL_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{SMALL_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{SMALL_MODEL}"
-                mapped = True
-
-        # Map Sonnet to BIG_MODEL based on provider preference
-        elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"aiplatform/{BIG_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{BIG_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{BIG_MODEL}"
-                mapped = True
-
-        # Add prefixes to non-mapped models if they match known lists
-        elif not mapped:
-            if clean_v in GEMINI_MODELS and not v.startswith(('gemini/', 'aiplatform/')):
-                if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED:
-                    new_model = f"aiplatform/{clean_v}"
-                else:
-                    new_model = f"gemini/{clean_v}"
-                mapped = True # Technically mapped to add prefix
-            elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
-                new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
-        # --- Mapping Logic --- END ---
+            # Map Claude Haiku to the small model
+            new_model = f"aiplatform/{AIPLATFORM_MODELS[1]}"  # gemini-2.0-flash
+            mapped = True
+            logger.info(f"Mapping Claude Haiku to {new_model}")
+        elif 'sonnet' in clean_v.lower() or 'opus' in clean_v.lower():
+            # Map Claude Sonnet/Opus to the big model
+            new_model = f"aiplatform/{AIPLATFORM_MODELS[0]}"  # gemini-2.5-pro-preview
+            mapped = True
+            logger.info(f"Mapping Claude Sonnet/Opus to {new_model}")
+        elif clean_v in AIPLATFORM_MODELS:
+            # Direct model reference, ensure it has aiplatform/ prefix
+            new_model = f"aiplatform/{clean_v}"
+            mapped = True
+            logger.info(f"Using directly specified model with AIplatform prefix: {new_model}")
+        else:
+            # For any unrecognized model, default to the most capable one
+            new_model = f"aiplatform/{AIPLATFORM_MODELS[0]}"  # Default to the most capable model
+            mapped = True
+            logger.warning(f"⚠️ Unrecognized model: '{original_model}'. Defaulting to {new_model}")
 
         if mapped:
-            logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
-        else:
-             # If no mapping occurred and no prefix exists, log warning or decide default
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'aiplatform/')):
-                 logger.warning(f"⚠️ No prefix or mapping rule for model: '{original_model}'. Using as is.")
-             new_model = v # Ensure we return the original if no rule applied
-
+            logger.info(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
+        
         # Store the original model in the values dictionary
         values = info.data
         if isinstance(values, dict):
@@ -290,14 +246,12 @@ class TokenCountRequest(BaseModel):
     @field_validator('model')
     def validate_model_token_count(cls, v, info): # Renamed to avoid conflict
         # Use the same logic as MessagesRequest validator
-        # NOTE: Pydantic validators might not share state easily if not class methods
-        # Re-implementing the logic here for clarity, could be refactored
         original_model = v
         new_model = v # Default to original value
 
-        logger.debug(f"📋 TOKEN COUNT VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}'")
+        logger.debug(f"📋 TOKEN COUNT VALIDATION: Original='{original_model}'")
 
-        # Remove provider prefixes for easier matching
+        # Extract model name, removing any provider prefix
         clean_v = v
         if clean_v.startswith('anthropic/'):
             clean_v = clean_v[10:]
@@ -307,53 +261,37 @@ class TokenCountRequest(BaseModel):
             clean_v = clean_v[7:]
         elif clean_v.startswith('aiplatform/'):
             clean_v = clean_v[11:]
+        elif clean_v.startswith('claude-'):  # Directly detect Claude models without prefix
+            pass
 
-        # --- Mapping Logic --- START ---
+        # --- Mapping Logic ---
         mapped = False
-        # Map Haiku to SMALL_MODEL based on provider preference
+        
+        # Map Claude models to corresponding AIplatform models
         if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"aiplatform/{SMALL_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{SMALL_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{SMALL_MODEL}"
-                mapped = True
-
-        # Map Sonnet to BIG_MODEL based on provider preference
-        elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"aiplatform/{BIG_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{BIG_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{BIG_MODEL}"
-                mapped = True
-
-        # Add prefixes to non-mapped models if they match known lists
-        elif not mapped:
-            if clean_v in GEMINI_MODELS and not v.startswith(('gemini/', 'aiplatform/')):
-                if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED:
-                    new_model = f"aiplatform/{clean_v}"
-                else:
-                    new_model = f"gemini/{clean_v}"
-                mapped = True # Technically mapped to add prefix
-            elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
-                new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
-        # --- Mapping Logic --- END ---
+            # Map Claude Haiku to the small model
+            new_model = f"aiplatform/{AIPLATFORM_MODELS[1]}"  # gemini-2.0-flash
+            mapped = True
+            logger.debug(f"Mapping Claude Haiku to {new_model} for token counting")
+        elif 'sonnet' in clean_v.lower() or 'opus' in clean_v.lower():
+            # Map Claude Sonnet/Opus to the big model
+            new_model = f"aiplatform/{AIPLATFORM_MODELS[0]}"  # gemini-2.5-pro-preview
+            mapped = True
+            logger.debug(f"Mapping Claude Sonnet/Opus to {new_model} for token counting")
+        elif clean_v in AIPLATFORM_MODELS:
+            # Direct model reference, ensure it has aiplatform/ prefix
+            new_model = f"aiplatform/{clean_v}"
+            mapped = True
+            logger.debug(f"Using directly specified model with AIplatform prefix: {new_model}")
+        else:
+            # For any unrecognized model, default to the most capable one
+            new_model = f"aiplatform/{AIPLATFORM_MODELS[0]}"  # Default to the most capable model
+            mapped = True
+            logger.warning(f"⚠️ Unrecognized model for token count: '{original_model}'. Defaulting to {new_model}")
 
         if mapped:
             logger.debug(f"📌 TOKEN COUNT MAPPING: '{original_model}' ➡️ '{new_model}'")
-        else:
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'aiplatform/')):
-                 logger.warning(f"⚠️ No prefix or mapping rule for token count model: '{original_model}'. Using as is.")
-             new_model = v # Ensure we return the original if no rule applied
-
+        
         # Store the original model in the values dictionary
         values = info.data
         if isinstance(values, dict):
@@ -1191,10 +1129,8 @@ async def create_message(
     raw_request: Request
 ):
     try:
-        # print the body here
+        # parse the raw body as JSON since it's bytes
         body = await raw_request.body()
-    
-        # Parse the raw body as JSON since it's bytes
         body_json = json.loads(body.decode('utf-8'))
         original_model = body_json.get("model", "unknown")
         
@@ -1205,527 +1141,352 @@ async def create_message(
         
         # Clean model name for capability check
         clean_model = request.model
-        if clean_model.startswith("anthropic/"):
-            clean_model = clean_model[len("anthropic/"):]
-        elif clean_model.startswith("openai/"):
-            clean_model = clean_model[len("openai/"):]
+        if clean_model.startswith("aiplatform/"):
+            clean_model_name = clean_model.replace("aiplatform/", "")
+        else:
+            # Get the model name portion after the last slash if it exists
+            clean_model_name = clean_model.split("/")[-1]
         
-        logger.debug(f"📊 PROCESSING REQUEST: Model={request.model}, Stream={request.stream}")
+        logger.info(f"📊 PROCESSING REQUEST: Model={clean_model_name}, Stream={request.stream}")
         
-        # Convert Anthropic request to LiteLLM format
+        # Convert Anthropic request to our format
         litellm_request = convert_anthropic_to_litellm(request)
         
-        # Determine which API key to use based on the model
-        if request.model.startswith("openai/"):
-            litellm_request["api_key"] = OPENAI_API_KEY
-            logger.info(f"Using OpenAI API key for model: {request.model}")
-        elif request.model.startswith("gemini/"):
-            litellm_request["api_key"] = GEMINI_API_KEY
-            logger.info(f"Using Gemini API key for model: {request.model}")
-        elif request.model.startswith("aiplatform/"):
-            # For AIplatform, we use the credentials we got from the authenticator
-            if AIPLATFORM_ENABLED and aiplatform_credentials:
-                try:
-                    logger.info(f"Using direct Thomson Reuters AIplatform integration (bypassing LiteLLM)")
+        # Initialize Vertex AI with our authenticated credentials if not already done
+        vertexai.init(project=aiplatform_project_id, location=aiplatform_location, credentials=aiplatform_credentials)
+        logger.info(f"Using Vertex AI with project={aiplatform_project_id}, location={aiplatform_location}")
+        
+        # Create a direct Vertex AI integration function that will be called instead of litellm.completion
+        async def direct_vertexai_completion(request_data):
+            """Direct interaction with Vertex AI, bypassing LiteLLM"""
+            logger.info(f"Direct Vertex AI request for model: {clean_model_name}")
+            
+            try:
+                # Create the Vertex AI model
+                model = GenerativeModel(clean_model_name)
+                
+                # Get the messages from the LiteLLM request
+                messages = request_data.get("messages", [])
+                
+                # Start a chat session
+                chat = model.start_chat(response_validation=False)
+                
+                # Process the messages to build the conversation history
+                # We need to handle system message and user/assistant messages
+                system_message = None
+                history = []
+                
+                for msg in messages:
+                    role = msg.get("role")
+                    content = msg.get("content", "")
                     
-                    # Extract model name without the prefix
-                    if request.model.startswith("aiplatform/"):
-                        clean_model_name = request.model.replace("aiplatform/", "")
-                    else:
-                        # Get the model name portion after the last slash if it exists
-                        clean_model_name = request.model.split("/")[-1]
-                    
-                    # Import Vertex AI components
-                    import vertexai
-                    from vertexai.generative_models import GenerativeModel, ChatSession
-                    
-                    # Initialize Vertex AI with our authenticated credentials
-                    vertexai.init(project=aiplatform_project_id, location=aiplatform_location, credentials=aiplatform_credentials)
-                    logger.info(f"Initialized Vertex AI with project={aiplatform_project_id}, location={aiplatform_location}")
-                    
-                    # Create a direct Vertex AI integration function that will be called instead of litellm.completion
-                    async def direct_vertexai_completion(request_data):
-                        """Direct interaction with Vertex AI, bypassing LiteLLM"""
-                        logger.info(f"Direct Vertex AI request for model: {clean_model_name}")
-                        
+                    # Handle system message
+                    if role == "system":
+                        system_message = content if isinstance(content, str) else str(content)
+                    # Build conversation history
+                    elif role in ["user", "assistant"]:
+                        if isinstance(content, str):
+                            history.append({"role": role, "content": content})
+                        else:
+                            # Convert complex content to text
+                            if isinstance(content, list):
+                                text_content = ""
+                                for item in content:
+                                    if isinstance(item, dict):
+                                        if item.get("type") == "text":
+                                            text_content += item.get("text", "") + "\n"
+                                history.append({"role": role, "content": text_content.strip()})
+                
+                # Find the last user message which we'll send to the model
+                last_user_msg = None
+                for msg in reversed(history):
+                    if msg["role"] == "user":
+                        last_user_msg = msg["content"]
+                        break
+                
+                if not last_user_msg:
+                    raise ValueError("No user message found in the conversation")
+                
+                # Construct the complete prompt with system message if available
+                prompt = last_user_msg
+                if system_message:
+                    prompt = f"{system_message}\n\n{prompt}"
+                
+                # If streaming is enabled
+                if request_data.get("stream", False):
+                    # Create a generator that yields responses as they come
+                    async def generate_responses():
+                        """Generate Anthropic-style streaming responses using content blocks and deltas."""
+                        # Call the model (non-streaming for simplicity)
                         try:
-                            # Create the Vertex AI model
-                            model = GenerativeModel(clean_model_name)
+                            response = chat.send_message(prompt)
                             
-                            # Get the messages from the LiteLLM request
-                            messages = request_data.get("messages", [])
+                            # Get the response text
+                            response_text = response.text
                             
-                            # Start a chat session
-                            chat = model.start_chat(response_validation=False)
+                            # Simulate Anthropic streaming format for the handle_streaming function
                             
-                            # Process the messages to build the conversation history
-                            # We need to handle system message and user/assistant messages
-                            system_message = None
-                            history = []
+                            # 1. Generate message_start event
+                            message_id = f"msg_{uuid.uuid4().hex[:24]}"
+                            yield {
+                                "choices": [
+                                    {
+                                        "delta": {"anthropic_event": "message_start", "message": {
+                                            "id": message_id,
+                                            "type": "message",
+                                            "role": "assistant",
+                                            "content": [],
+                                            "model": clean_model_name
+                                        }},
+                                        "index": 0,
+                                        "finish_reason": None
+                                    }
+                                ],
+                                "created": int(time.time()),
+                                "model": clean_model_name,
+                                "object": "chat.completion.chunk"
+                            }
                             
-                            for msg in messages:
-                                role = msg.get("role")
-                                content = msg.get("content", "")
-                                
-                                # Handle system message
-                                if role == "system":
-                                    system_message = content if isinstance(content, str) else str(content)
-                                # Build conversation history
-                                elif role in ["user", "assistant"]:
-                                    if isinstance(content, str):
-                                        history.append({"role": role, "content": content})
-                                    else:
-                                        # Convert complex content to text
-                                        if isinstance(content, list):
-                                            text_content = ""
-                                            for item in content:
-                                                if isinstance(item, dict):
-                                                    if item.get("type") == "text":
-                                                        text_content += item.get("text", "") + "\n"
-                                            history.append({"role": role, "content": text_content.strip()})
+                            # 2. Generate content_block_start event
+                            block_id = 0
+                            yield {
+                                "choices": [
+                                    {
+                                        "delta": {"anthropic_event": "content_block_start", "index": block_id, "content_block": {
+                                            "type": "text",
+                                            "text": ""
+                                        }},
+                                        "index": 0,
+                                        "finish_reason": None
+                                    }
+                                ],
+                                "created": int(time.time()),
+                                "model": clean_model_name,
+                                "object": "chat.completion.chunk"
+                            }
                             
-                            # Find the last user message which we'll send to the model
-                            last_user_msg = None
-                            for msg in reversed(history):
-                                if msg["role"] == "user":
-                                    last_user_msg = msg["content"]
-                                    break
+                            # 3. Generate ping event (common in Anthropic streams)
+                            yield {
+                                "choices": [
+                                    {
+                                        "delta": {"anthropic_event": "ping"},
+                                        "index": 0,
+                                        "finish_reason": None
+                                    }
+                                ],
+                                "created": int(time.time()),
+                                "model": clean_model_name,
+                                "object": "chat.completion.chunk"
+                            }
                             
-                            if not last_user_msg:
-                                raise ValueError("No user message found in the conversation")
-                            
-                            # Construct the complete prompt with system message if available
-                            prompt = last_user_msg
-                            if system_message:
-                                prompt = f"{system_message}\n\n{prompt}"
-                            
-                            # If streaming is enabled
-                            if request_data.get("stream", False):
-                                # Create a generator that yields responses as they come
-                                async def generate_responses():
-                                    """Generate Anthropic-style streaming responses using content blocks and deltas."""
-                                    # Call the model (non-streaming for simplicity)
-                                    try:
-                                        response = chat.send_message(prompt)
-                                        
-                                        # Get the response text
-                                        response_text = response.text
-                                        
-                                        # Simulate Anthropic streaming format for the handle_streaming function
-                                        
-                                        # 1. Generate message_start event
-                                        message_id = f"msg_{uuid.uuid4().hex[:24]}"
-                                        yield {
-                                            "choices": [
-                                                {
-                                                    "delta": {"anthropic_event": "message_start", "message": {
-                                                        "id": message_id,
-                                                        "type": "message",
-                                                        "role": "assistant",
-                                                        "content": [],
-                                                        "model": clean_model_name
-                                                    }},
-                                                    "index": 0,
-                                                    "finish_reason": None
-                                                }
-                                            ],
-                                            "created": int(time.time()),
-                                            "model": clean_model_name,
-                                            "object": "chat.completion.chunk"
-                                        }
-                                        
-                                        # 2. Generate content_block_start event
-                                        block_id = 0
-                                        yield {
-                                            "choices": [
-                                                {
-                                                    "delta": {"anthropic_event": "content_block_start", "index": block_id, "content_block": {
-                                                        "type": "text",
-                                                        "text": ""
-                                                    }},
-                                                    "index": 0,
-                                                    "finish_reason": None
-                                                }
-                                            ],
-                                            "created": int(time.time()),
-                                            "model": clean_model_name,
-                                            "object": "chat.completion.chunk"
-                                        }
-                                        
-                                        # 3. Generate ping event (common in Anthropic streams)
-                                        yield {
-                                            "choices": [
-                                                {
-                                                    "delta": {"anthropic_event": "ping"},
-                                                    "index": 0,
-                                                    "finish_reason": None
-                                                }
-                                            ],
-                                            "created": int(time.time()),
-                                            "model": clean_model_name,
-                                            "object": "chat.completion.chunk"
-                                        }
-                                        
-                                        # 4. Stream the response in small chunks with content_block_delta events
-                                        # For non-empty responses, stream the text
-                                        if response_text.strip():
-                                            # Stream the full text in one chunk for simplicity
-                                            # This is a compromise to make the test pass
-                                            yield {
-                                                "choices": [
-                                                    {
-                                                        "delta": {"anthropic_event": "content_block_delta", "index": block_id, "delta": {
-                                                            "type": "text_delta",
-                                                            "text": response_text
-                                                        }},
-                                                        "index": 0,
-                                                        "finish_reason": None
-                                                    }
-                                                ],
-                                                "created": int(time.time()),
-                                                "model": clean_model_name,
-                                                "object": "chat.completion.chunk"
-                                            }
-                                            
-                                            # Small delay for natural feeling
-                                            await asyncio.sleep(0.05)
-                                        else:
-                                            # If empty response, still emit a content_block_delta
-                                            yield {
-                                                "choices": [
-                                                    {
-                                                        "delta": {"anthropic_event": "content_block_delta", "index": block_id, "delta": {
-                                                            "type": "text_delta",
-                                                            "text": "No response text available."
-                                                        }},
-                                                        "index": 0,
-                                                        "finish_reason": None
-                                                    }
-                                                ],
-                                                "created": int(time.time()),
-                                                "model": clean_model_name,
-                                                "object": "chat.completion.chunk"
-                                            }
-                                        
-                                        # 5. Generate content_block_stop event
-                                        yield {
-                                            "choices": [
-                                                {
-                                                    "delta": {"anthropic_event": "content_block_stop", "index": block_id},
-                                                    "index": 0,
-                                                    "finish_reason": None
-                                                }
-                                            ],
-                                            "created": int(time.time()),
-                                            "model": clean_model_name,
-                                            "object": "chat.completion.chunk"
-                                        }
-                                        
-                                        # 6. Generate message_delta event
-                                        yield {
-                                            "choices": [
-                                                {
-                                                    "delta": {"anthropic_event": "message_delta", "delta": {
-                                                        "stop_reason": "end_turn",
-                                                        "stop_sequence": None
-                                                    }, "usage": {"output_tokens": len(response_text) // 4}},
-                                                    "index": 0,
-                                                    "finish_reason": None
-                                                }
-                                            ],
-                                            "created": int(time.time()),
-                                            "model": clean_model_name,
-                                            "object": "chat.completion.chunk"
-                                        }
-                                        
-                                        # 7. Generate message_stop event
-                                        yield {
-                                            "choices": [
-                                                {
-                                                    "delta": {"anthropic_event": "message_stop"},
-                                                    "index": 0,
-                                                    "finish_reason": "stop"
-                                                }
-                                            ],
-                                            "created": int(time.time()),
-                                            "model": clean_model_name,
-                                            "object": "chat.completion.chunk"
-                                        }
-                                    except Exception as e:
-                                        logger.error(f"Error in streaming generation: {e}", exc_info=True)
-                                        # If there's an error, still try to emit some events to avoid hanging clients
-                                        yield {
-                                            "choices": [
-                                                {
-                                                    "delta": {"content": f"Error: {str(e)}"},
-                                                    "index": 0,
-                                                    "finish_reason": "stop"
-                                                }
-                                            ],
-                                            "created": int(time.time()),
-                                            "model": clean_model_name,
-                                            "object": "chat.completion.chunk"
-                                        }
-                                
-                                return generate_responses()
-                            else:
-                                # For non-streaming requests
-                                response = chat.send_message(prompt)
-                                
-                                # Convert to LiteLLM format for compatibility with the rest of code
-                                return {
-                                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                                    "object": "chat.completion",
-                                    "created": int(time.time()),
-                                    "model": clean_model_name,
+                            # 4. Stream the response in small chunks with content_block_delta events
+                            # For non-empty responses, stream the text
+                            if response_text.strip():
+                                # Stream the full text in one chunk for simplicity
+                                # This is a compromise to make the test pass
+                                yield {
                                     "choices": [
                                         {
+                                            "delta": {"anthropic_event": "content_block_delta", "index": block_id, "delta": {
+                                                "type": "text_delta",
+                                                "text": response_text
+                                            }},
                                             "index": 0,
-                                            "message": {
-                                                "role": "assistant",
-                                                "content": response.text
-                                            },
-                                            "finish_reason": "stop"
+                                            "finish_reason": None
                                         }
                                     ],
-                                    "usage": {
-                                        "prompt_tokens": len(prompt) // 4,  # Rough estimation
-                                        "completion_tokens": len(response.text) // 4,  # Rough estimation
-                                        "total_tokens": (len(prompt) + len(response.text)) // 4  # Rough estimation
-                                    }
+                                    "created": int(time.time()),
+                                    "model": clean_model_name,
+                                    "object": "chat.completion.chunk"
                                 }
-                        
-                        except Exception as e:
-                            logger.error(f"Error in direct Vertex AI integration: {e}", exc_info=True)
-                            raise
-                    
-                    # Store the direct completion function in a global variable
-                    request._aiplatform_direct = direct_vertexai_completion
-                    
-                    # We'll check for this attribute later when deciding whether to use litellm or direct vertexai
-                    litellm_request["aiplatform_direct"] = True
-                    
-                    logger.info(f"Direct AIplatform integration ready for {clean_model_name}")
-                
-                except Exception as e:
-                    logger.error(f"Error setting up AIplatform auth: {e}", exc_info=True)
-                    # Fall back to using the Gemini API key
-                    litellm_request["model"] = litellm_request["model"].replace("aiplatform/", "gemini/").replace("vertex_ai/", "gemini/")
-                    litellm_request["api_key"] = GEMINI_API_KEY
-                    logger.warning(f"AIplatform configuration failed, falling back to Gemini API key for model: {request.model}")
-            else:
-                # Fall back to using the Gemini API key if AIplatform authentication failed
-                litellm_request["model"] = litellm_request["model"].replace("aiplatform/", "gemini/")
-                litellm_request["api_key"] = GEMINI_API_KEY
-                logger.warning(f"AIplatform authentication failed, falling back to Gemini API key for model: {request.model}")
-        else:
-            litellm_request["api_key"] = ANTHROPIC_API_KEY
-            logger.debug(f"Using Anthropic API key for model: {request.model}")
-        
-        # For OpenAI models - modify request format to work with limitations
-        if ("openai" in litellm_request["model"] or "vertex_ai" in litellm_request["model"]) and "messages" in litellm_request:
-            logger.debug(f"Processing OpenAI/Vertex AI model request: {litellm_request['model']}")
-            
-            # For OpenAI models, we need to convert content blocks to simple strings
-            # and handle other requirements
-            for i, msg in enumerate(litellm_request["messages"]):
-                # Special case - handle message content directly when it's a list of tool_result
-                # This is a specific case we're seeing in the error
-                if "content" in msg and isinstance(msg["content"], list):
-                    is_only_tool_result = True
-                    for block in msg["content"]:
-                        if not isinstance(block, dict) or block.get("type") != "tool_result":
-                            is_only_tool_result = False
-                            break
-                    
-                    if is_only_tool_result and len(msg["content"]) > 0:
-                        logger.warning(f"Found message with only tool_result content - special handling required")
-                        # Extract the content from all tool_result blocks
-                        all_text = ""
-                        for block in msg["content"]:
-                            all_text += "Tool Result:\n"
-                            result_content = block.get("content", [])
-                            
-                            # Handle different formats of content
-                            if isinstance(result_content, list):
-                                for item in result_content:
-                                    if isinstance(item, dict) and item.get("type") == "text":
-                                        all_text += item.get("text", "") + "\n"
-                                    elif isinstance(item, dict):
-                                        # Fall back to string representation of any dict
-                                        try:
-                                            item_text = item.get("text", json.dumps(item))
-                                            all_text += item_text + "\n"
-                                        except:
-                                            all_text += str(item) + "\n"
-                            elif isinstance(result_content, str):
-                                all_text += result_content + "\n"
+                                
+                                # Small delay for natural feeling
+                                await asyncio.sleep(0.05)
                             else:
-                                try:
-                                    all_text += json.dumps(result_content) + "\n"
-                                except:
-                                    all_text += str(result_content) + "\n"
-                        
-                        # Replace the list with extracted text
-                        litellm_request["messages"][i]["content"] = all_text.strip() or "..."
-                        logger.warning(f"Converted tool_result to plain text: {all_text.strip()[:200]}...")
-                        continue  # Skip normal processing for this message
-                
-                # 1. Handle content field - normal case
-                if "content" in msg:
-                    # Check if content is a list (content blocks)
-                    if isinstance(msg["content"], list):
-                        # Convert complex content blocks to simple string
-                        text_content = ""
-                        for block in msg["content"]:
-                            if isinstance(block, dict):
-                                # Handle different content block types
-                                if block.get("type") == "text":
-                                    text_content += block.get("text", "") + "\n"
-                                
-                                # Handle tool_result content blocks - extract nested text
-                                elif block.get("type") == "tool_result":
-                                    tool_id = block.get("tool_use_id", "unknown")
-                                    text_content += f"[Tool Result ID: {tool_id}]\n"
-                                    
-                                    # Extract text from the tool_result content
-                                    result_content = block.get("content", [])
-                                    if isinstance(result_content, list):
-                                        for item in result_content:
-                                            if isinstance(item, dict) and item.get("type") == "text":
-                                                text_content += item.get("text", "") + "\n"
-                                            elif isinstance(item, dict):
-                                                # Handle any dict by trying to extract text or convert to JSON
-                                                if "text" in item:
-                                                    text_content += item.get("text", "") + "\n"
-                                                else:
-                                                    try:
-                                                        text_content += json.dumps(item) + "\n"
-                                                    except:
-                                                        text_content += str(item) + "\n"
-                                    elif isinstance(result_content, dict):
-                                        # Handle dictionary content
-                                        if result_content.get("type") == "text":
-                                            text_content += result_content.get("text", "") + "\n"
-                                        else:
-                                            try:
-                                                text_content += json.dumps(result_content) + "\n"
-                                            except:
-                                                text_content += str(result_content) + "\n"
-                                    elif isinstance(result_content, str):
-                                        text_content += result_content + "\n"
-                                    else:
-                                        try:
-                                            text_content += json.dumps(result_content) + "\n"
-                                        except:
-                                            text_content += str(result_content) + "\n"
-                                
-                                # Handle tool_use content blocks
-                                elif block.get("type") == "tool_use":
-                                    tool_name = block.get("name", "unknown")
-                                    tool_id = block.get("id", "unknown")
-                                    tool_input = json.dumps(block.get("input", {}))
-                                    text_content += f"[Tool: {tool_name} (ID: {tool_id})]\nInput: {tool_input}\n\n"
-                                
-                                # Handle image content blocks
-                                elif block.get("type") == "image":
-                                    text_content += "[Image content - not displayed in text format]\n"
-                        
-                        # Make sure content is never empty for OpenAI models
-                        if not text_content.strip():
-                            text_content = "..."
-                        
-                        litellm_request["messages"][i]["content"] = text_content.strip()
-                    # Also check for None or empty string content
-                    elif msg["content"] is None:
-                        litellm_request["messages"][i]["content"] = "..." # Empty content not allowed
-                
-                # 2. Remove any fields OpenAI doesn't support in messages
-                for key in list(msg.keys()):
-                    if key not in ["role", "content", "name", "tool_call_id", "tool_calls"]:
-                        logger.warning(f"Removing unsupported field from message: {key}")
-                        del msg[key]
+                                # If empty response, still emit a content_block_delta
+                                yield {
+                                    "choices": [
+                                        {
+                                            "delta": {"anthropic_event": "content_block_delta", "index": block_id, "delta": {
+                                                "type": "text_delta",
+                                                "text": "No response text available."
+                                            }},
+                                            "index": 0,
+                                            "finish_reason": None
+                                        }
+                                    ],
+                                    "created": int(time.time()),
+                                    "model": clean_model_name,
+                                    "object": "chat.completion.chunk"
+                                }
+                            
+                            # 5. Generate content_block_stop event
+                            yield {
+                                "choices": [
+                                    {
+                                        "delta": {"anthropic_event": "content_block_stop", "index": block_id},
+                                        "index": 0,
+                                        "finish_reason": None
+                                    }
+                                ],
+                                "created": int(time.time()),
+                                "model": clean_model_name,
+                                "object": "chat.completion.chunk"
+                            }
+                            
+                            # 6. Generate message_delta event
+                            yield {
+                                "choices": [
+                                    {
+                                        "delta": {"anthropic_event": "message_delta", "delta": {
+                                            "stop_reason": "end_turn",
+                                            "stop_sequence": None
+                                        }, "usage": {"output_tokens": len(response_text) // 4}},
+                                        "index": 0,
+                                        "finish_reason": None
+                                    }
+                                ],
+                                "created": int(time.time()),
+                                "model": clean_model_name,
+                                "object": "chat.completion.chunk"
+                            }
+                            
+                            # 7. Generate message_stop event
+                            yield {
+                                "choices": [
+                                    {
+                                        "delta": {"anthropic_event": "message_stop"},
+                                        "index": 0,
+                                        "finish_reason": "stop"
+                                    }
+                                ],
+                                "created": int(time.time()),
+                                "model": clean_model_name,
+                                "object": "chat.completion.chunk"
+                            }
+                        except Exception as e:
+                            logger.error(f"Error in streaming generation: {e}", exc_info=True)
+                            # If there's an error, still try to emit some events to avoid hanging clients
+                            yield {
+                                "choices": [
+                                    {
+                                        "delta": {"content": f"Error: {str(e)}"},
+                                        "index": 0,
+                                        "finish_reason": "stop"
+                                    }
+                                ],
+                                "created": int(time.time()),
+                                "model": clean_model_name,
+                                "object": "chat.completion.chunk"
+                            }
+                    
+                    return generate_responses()
+                else:
+                    # For non-streaming requests
+                    response = chat.send_message(prompt)
+                    
+                    # Convert to format compatible with the rest of code
+                    return {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": clean_model_name,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": response.text
+                                },
+                                "finish_reason": "stop"
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": len(prompt) // 4,  # Rough estimation
+                            "completion_tokens": len(response.text) // 4,  # Rough estimation
+                            "total_tokens": (len(prompt) + len(response.text)) // 4  # Rough estimation
+                        }
+                    }
             
-            # 3. Final validation - check for any remaining invalid values and dump full message details
-            for i, msg in enumerate(litellm_request["messages"]):
-                # Log the message format for debugging
-                logger.debug(f"Message {i} format check - role: {msg.get('role')}, content type: {type(msg.get('content'))}")
-                
-                # If content is still a list or None, replace with placeholder
-                if isinstance(msg.get("content"), list):
-                    logger.warning(f"CRITICAL: Message {i} still has list content after processing: {json.dumps(msg.get('content'))}")
-                    # Last resort - stringify the entire content as JSON
-                    litellm_request["messages"][i]["content"] = f"Content as JSON: {json.dumps(msg.get('content'))}"
-                elif msg.get("content") is None:
-                    logger.warning(f"Message {i} has None content - replacing with placeholder")
-                    litellm_request["messages"][i]["content"] = "..." # Fallback placeholder
+            except Exception as e:
+                logger.error(f"Error in direct Vertex AI integration: {e}", exc_info=True)
+                raise
         
-        # Only log basic info about the request, not the full details
-        logger.debug(f"Request for model: {litellm_request.get('model')}, stream: {litellm_request.get('stream', False)}")
+        # Simplify messages for Vertex AI - convert content blocks to strings
+        if "messages" in litellm_request:
+            for i, msg in enumerate(litellm_request["messages"]):
+                # Handle content as list (content blocks)
+                if "content" in msg and isinstance(msg["content"], list):
+                    # Convert complex content blocks to simple string
+                    text_content = ""
+                    for block in msg["content"]:
+                        if isinstance(block, dict):
+                            # Handle text blocks
+                            if block.get("type") == "text":
+                                text_content += block.get("text", "") + "\n"
+                            
+                            # Handle tool_result blocks
+                            elif block.get("type") == "tool_result":
+                                tool_id = block.get("tool_use_id", "unknown")
+                                text_content += f"[Tool Result ID: {tool_id}]\n"
+                                
+                                # Extract text from the tool_result content
+                                result_content = block.get("content", [])
+                                processed_content = parse_tool_result_content(result_content)
+                                text_content += processed_content + "\n\n"
+                            
+                            # Handle tool_use blocks
+                            elif block.get("type") == "tool_use":
+                                tool_name = block.get("name", "unknown")
+                                tool_id = block.get("id", "unknown")
+                                tool_input = json.dumps(block.get("input", {}))
+                                text_content += f"[Tool: {tool_name} (ID: {tool_id})]\nInput: {tool_input}\n\n"
+                    
+                    # Make sure content is never empty
+                    if not text_content.strip():
+                        text_content = "..."
+                    
+                    litellm_request["messages"][i]["content"] = text_content.strip()
+                # Also check for None content
+                elif msg.get("content") is None:
+                    litellm_request["messages"][i]["content"] = "..." # Empty content not allowed
+        
+        # Only log basic info about the request
+        logger.debug(f"Request for model: {clean_model_name}, stream: {request.stream}")
+        
+        # Log request in nice format
+        num_tools = len(request.tools) if request.tools else 0
+        log_request_beautifully(
+            "POST", 
+            raw_request.url.path, 
+            display_model, 
+            clean_model_name,
+            len(litellm_request['messages']),
+            num_tools,
+            200  # Assuming success at this point
+        )
         
         # Handle streaming mode
         if request.stream:
-            # Use LiteLLM for streaming, unless we're using AIplatform directly
-            num_tools = len(request.tools) if request.tools else 0
-            
-            log_request_beautifully(
-                "POST", 
-                raw_request.url.path, 
-                display_model, 
-                litellm_request.get('model'),
-                len(litellm_request['messages']),
-                num_tools,
-                200  # Assuming success at this point
-            )
-            
-            # Check if we have a direct AIplatform integration to use
-            if hasattr(request, "_aiplatform_direct") and litellm_request.get("aiplatform_direct"):
-                logger.info("Using direct AIplatform integration for streaming")
-                # Get the direct completion function
-                direct_vertexai_completion_fn = request._aiplatform_direct
-                # Call it with the request data
-                response_generator = await direct_vertexai_completion_fn(litellm_request)
-            else:
-                # Use standard LiteLLM for other providers
-                # Ensure we use the async version for streaming
-                logger.info("Using LiteLLM for streaming")
-                response_generator = await litellm.acompletion(**litellm_request)
+            logger.info("Using direct AIplatform integration for streaming")
+            # Use our direct Vertex AI integration
+            response_generator = await direct_vertexai_completion(litellm_request)
             
             return StreamingResponse(
                 handle_streaming(response_generator, request),
                 media_type="text/event-stream"
             )
         else:
-            # Use LiteLLM for regular completion, unless we're using AIplatform directly
-            num_tools = len(request.tools) if request.tools else 0
-            
-            log_request_beautifully(
-                "POST", 
-                raw_request.url.path, 
-                display_model, 
-                litellm_request.get('model'),
-                len(litellm_request['messages']),
-                num_tools,
-                200  # Assuming success at this point
-            )
-            
+            # For non-streaming requests
+            logger.info("Using direct AIplatform integration for completion")
             start_time = time.time()
             
-            # Check if we have a direct AIplatform integration to use
-            if hasattr(request, "_aiplatform_direct") and litellm_request.get("aiplatform_direct"):
-                logger.info("Using direct AIplatform integration for completion")
-                # Get the direct completion function
-                direct_vertexai_completion_fn = request._aiplatform_direct
-                # Call it with the request data
-                litellm_response = await direct_vertexai_completion_fn(litellm_request)
-            else:
-                # Use standard LiteLLM for other providers
-                logger.info("Using LiteLLM for completion")
-                litellm_response = litellm.completion(**litellm_request)
-                
-            logger.debug(f"✅ RESPONSE RECEIVED: Model={litellm_request.get('model')}, Time={time.time() - start_time:.2f}s")
+            # Use our direct Vertex AI integration
+            litellm_response = await direct_vertexai_completion(litellm_request)
             
-            # Convert LiteLLM response to Anthropic format
+            logger.debug(f"✅ RESPONSE RECEIVED: Model={clean_model_name}, Time={time.time() - start_time:.2f}s")
+            
+            # Convert response to Anthropic format
             anthropic_response = convert_litellm_to_anthropic(litellm_response, request)
             
             return anthropic_response
@@ -1741,12 +1502,7 @@ async def create_message(
             "traceback": error_traceback
         }
         
-        # Check for LiteLLM-specific attributes
-        for attr in ['message', 'status_code', 'response', 'llm_provider', 'model']:
-            if hasattr(e, attr):
-                error_details[attr] = getattr(e, attr)
-        
-        # Check for additional exception details in dictionaries
+        # Check for additional exception details
         if hasattr(e, '__dict__'):
             for key, value in e.__dict__.items():
                 if key not in error_details and key not in ['args', '__traceback__']:
@@ -1757,13 +1513,9 @@ async def create_message(
         
         # Format error for response
         error_message = f"Error: {str(e)}"
-        if 'message' in error_details and error_details['message']:
-            error_message += f"\nMessage: {error_details['message']}"
-        if 'response' in error_details and error_details['response']:
-            error_message += f"\nResponse: {error_details['response']}"
         
         # Return detailed error
-        status_code = error_details.get('status_code', 500)
+        status_code = getattr(e, 'status_code', 500)
         raise HTTPException(status_code=status_code, detail=error_message)
 
 @app.post("/v1/messages/count_tokens")
@@ -1780,57 +1532,53 @@ async def count_tokens(
         if "/" in display_model:
             display_model = display_model.split("/")[-1]
         
-        # Clean model name for capability check
-        clean_model = request.model
-        if clean_model.startswith("anthropic/"):
-            clean_model = clean_model[len("anthropic/"):]
-        elif clean_model.startswith("openai/"):
-            clean_model = clean_model[len("openai/"):]
+        # Clean model name for the AIplatform model
+        if request.model.startswith("aiplatform/"):
+            clean_model_name = request.model.replace("aiplatform/", "")
+        else:
+            clean_model_name = request.model.split("/")[-1]
         
-        # Convert the messages to a format LiteLLM can understand
-        converted_request = convert_anthropic_to_litellm(
-            MessagesRequest(
-                model=request.model,
-                max_tokens=100,  # Arbitrary value not used for token counting
-                messages=request.messages,
-                system=request.system,
-                tools=request.tools,
-                tool_choice=request.tool_choice,
-                thinking=request.thinking
-            )
+        # Convert the messages to a simplified format
+        messages_request = MessagesRequest(
+            model=request.model,
+            max_tokens=100,  # Arbitrary value not used for token counting
+            messages=request.messages,
+            system=request.system,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
+            thinking=request.thinking
         )
         
-        # Use LiteLLM's token_counter function
-        try:
-            # Import token_counter function
-            from litellm import token_counter
-            
-            # Log the request beautifully
-            num_tools = len(request.tools) if request.tools else 0
-            
-            log_request_beautifully(
-                "POST",
-                raw_request.url.path,
-                display_model,
-                converted_request.get('model'),
-                len(converted_request['messages']),
-                num_tools,
-                200  # Assuming success at this point
-            )
-            
-            # Count tokens
-            token_count = token_counter(
-                model=converted_request["model"],
-                messages=converted_request["messages"],
-            )
-            
-            # Return Anthropic-style response
-            return TokenCountResponse(input_tokens=token_count)
-            
-        except ImportError:
-            logger.error("Could not import token_counter from litellm")
-            # Fallback to a simple approximation
-            return TokenCountResponse(input_tokens=1000)  # Default fallback
+        converted_request = convert_anthropic_to_litellm(messages_request)
+        
+        # Log the request beautifully
+        num_tools = len(request.tools) if request.tools else 0
+        
+        log_request_beautifully(
+            "POST",
+            raw_request.url.path,
+            display_model,
+            clean_model_name,
+            len(converted_request['messages']),
+            num_tools,
+            200  # Assuming success at this point
+        )
+        
+        # For AIplatform models, we use a simple approximation based on character count
+        # This is because we don't have a token counter for Vertex AI models
+        
+        prompt_text = ""
+        for msg in converted_request.get("messages", []):
+            if "content" in msg:
+                content = msg["content"]
+                if isinstance(content, str):
+                    prompt_text += content + "\n"
+        
+        # Simple approximation: 1 token ≈ 4 characters
+        token_estimate = len(prompt_text) // 4
+        
+        # Return Anthropic-style response
+        return TokenCountResponse(input_tokens=token_estimate)
             
     except Exception as e:
         import traceback
