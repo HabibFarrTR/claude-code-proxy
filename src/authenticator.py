@@ -31,11 +31,14 @@ def get_gemini_credentials():
         AuthenticationError: If authentication fails for any reason.
     """
     workspace_id = os.getenv("WORKSPACE_ID")
-    model_name = os.getenv("MODEL_NAME")  # Model name might be needed by auth endpoint
+    model_name = os.getenv("MODEL_NAME", "gemini-2.5-pro-preview-03-25")  # Use BIG_MODEL as default
     auth_url = os.getenv("AUTH_URL")
 
-    if not all([workspace_id, model_name, auth_url]):
-        raise AuthenticationError("Missing required environment variables: WORKSPACE_ID, MODEL_NAME, AUTH_URL")
+    if not all([workspace_id, auth_url]):
+        raise AuthenticationError("Missing required environment variables: WORKSPACE_ID, AUTH_URL")
+    
+    logging.info(f"Authenticating with AIplatform for workspace {workspace_id} and model {model_name}")
+    logging.info("NOTE: Authentication requires AWS credentials to be set up via 'mltools-cli aws-login' before running")
 
     payload = {
         "workspace_id": workspace_id,

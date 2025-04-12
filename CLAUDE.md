@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build/Test Commands
 - Install dependencies: `poetry install`
-- Run server: `poetry run uvicorn server:app --host 0.0.0.0 --port 8082 --reload`
-- Run server with script: `poetry run start server:app --host 0.0.0.0 --port 8082 --reload`
-- Run all tests: `poetry run python tests.py`
-- Run specific test types: `poetry run python tests.py --simple` or `--tools-only` or `--no-streaming`
+- Run server: `poetry run uvicorn src.server:app --host 0.0.0.0 --port 8082 --reload`
+- Run tests (all): `poetry run pytest tests/`
+- Run single test: `poetry run pytest tests/test_server.py::TestClassName::test_function_name -v`
+- Run test categories: `poetry run python tests.py --simple` or `--tools-only` or `--no-streaming`
+- Run with shell script: `./run_tests.sh` (accepts same arguments as tests.py)
 
 ## Code Style Guidelines
 - Imports: Group standard lib, third-party, and local imports, sorted alphabetically

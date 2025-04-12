@@ -14,13 +14,14 @@ from dotenv import load_dotenv
 import re
 from datetime import datetime
 import sys
+from src.authenticator import get_gemini_credentials, AuthenticationError
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.WARN,  # Change to INFO level to show more details
+    level=logging.INFO,  # Using INFO level to show more details
     format='%(asctime)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
@@ -89,6 +90,26 @@ PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "google").lower()
 # Default to latest Gemini models if not set
 BIG_MODEL = os.environ.get("BIG_MODEL", "gemini-2.5-pro-preview-03-25")
 SMALL_MODEL = os.environ.get("SMALL_MODEL", "gemini-2.0-flash")
+
+# AIplatform (Thomson Reuters) credentials
+AIPLATFORM_ENABLED = PREFERRED_PROVIDER == "aiplatform"
+aiplatform_project_id = None
+aiplatform_location = None 
+aiplatform_credentials = None
+
+# Try to initialize AIplatform credentials if it's the preferred provider
+if AIPLATFORM_ENABLED:
+    try:
+        aiplatform_project_id, aiplatform_location, aiplatform_credentials = get_gemini_credentials()
+        logging.info(f"Successfully initialized AIplatform credentials for project {aiplatform_project_id} in {aiplatform_location}")
+    except AuthenticationError as e:
+        logging.error(f"Failed to initialize AIplatform credentials: {e}")
+        logging.warning("Falling back to standard Gemini API key authentication")
+        AIPLATFORM_ENABLED = False
+    except Exception as e:
+        logging.error(f"Unexpected error initializing AIplatform credentials: {e}")
+        logging.warning("Falling back to standard Gemini API key authentication")
+        AIPLATFORM_ENABLED = False
 
 # List of OpenAI models
 OPENAI_MODELS = [
@@ -200,12 +221,17 @@ class MessagesRequest(BaseModel):
             clean_v = clean_v[7:]
         elif clean_v.startswith('gemini/'):
             clean_v = clean_v[7:]
+        elif clean_v.startswith('aiplatform/'):
+            clean_v = clean_v[11:]
 
         # --- Mapping Logic --- START ---
         mapped = False
         # Map Haiku to SMALL_MODEL based on provider preference
         if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and SMALL_MODEL in GEMINI_MODELS:
+                new_model = f"aiplatform/{SMALL_MODEL}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{SMALL_MODEL}"
                 mapped = True
             else:
@@ -214,7 +240,10 @@ class MessagesRequest(BaseModel):
 
         # Map Sonnet to BIG_MODEL based on provider preference
         elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and BIG_MODEL in GEMINI_MODELS:
+                new_model = f"aiplatform/{BIG_MODEL}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{BIG_MODEL}"
                 mapped = True
             else:
@@ -223,8 +252,11 @@ class MessagesRequest(BaseModel):
 
         # Add prefixes to non-mapped models if they match known lists
         elif not mapped:
-            if clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
-                new_model = f"gemini/{clean_v}"
+            if clean_v in GEMINI_MODELS and not v.startswith(('gemini/', 'aiplatform/')):
+                if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED:
+                    new_model = f"aiplatform/{clean_v}"
+                else:
+                    new_model = f"gemini/{clean_v}"
                 mapped = True # Technically mapped to add prefix
             elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
                 new_model = f"openai/{clean_v}"
@@ -235,7 +267,7 @@ class MessagesRequest(BaseModel):
             logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
              # If no mapping occurred and no prefix exists, log warning or decide default
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/')):
+             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'aiplatform/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for model: '{original_model}'. Using as is.")
              new_model = v # Ensure we return the original if no rule applied
 
@@ -273,12 +305,17 @@ class TokenCountRequest(BaseModel):
             clean_v = clean_v[7:]
         elif clean_v.startswith('gemini/'):
             clean_v = clean_v[7:]
+        elif clean_v.startswith('aiplatform/'):
+            clean_v = clean_v[11:]
 
         # --- Mapping Logic --- START ---
         mapped = False
         # Map Haiku to SMALL_MODEL based on provider preference
         if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and SMALL_MODEL in GEMINI_MODELS:
+                new_model = f"aiplatform/{SMALL_MODEL}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{SMALL_MODEL}"
                 mapped = True
             else:
@@ -287,7 +324,10 @@ class TokenCountRequest(BaseModel):
 
         # Map Sonnet to BIG_MODEL based on provider preference
         elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED and BIG_MODEL in GEMINI_MODELS:
+                new_model = f"aiplatform/{BIG_MODEL}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{BIG_MODEL}"
                 mapped = True
             else:
@@ -296,8 +336,11 @@ class TokenCountRequest(BaseModel):
 
         # Add prefixes to non-mapped models if they match known lists
         elif not mapped:
-            if clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
-                new_model = f"gemini/{clean_v}"
+            if clean_v in GEMINI_MODELS and not v.startswith(('gemini/', 'aiplatform/')):
+                if PREFERRED_PROVIDER == "aiplatform" and AIPLATFORM_ENABLED:
+                    new_model = f"aiplatform/{clean_v}"
+                else:
+                    new_model = f"gemini/{clean_v}"
                 mapped = True # Technically mapped to add prefix
             elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
                 new_model = f"openai/{clean_v}"
@@ -307,7 +350,7 @@ class TokenCountRequest(BaseModel):
         if mapped:
             logger.debug(f"📌 TOKEN COUNT MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/')):
+             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'aiplatform/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for token count model: '{original_model}'. Using as is.")
              new_model = v # Ensure we return the original if no rule applied
 
@@ -529,11 +572,11 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                 
                 messages.append({"role": msg.role, "content": processed_content})
     
-    # Cap max_tokens for OpenAI models to their limit of 16384
+    # Cap max_tokens for OpenAI, Gemini and Vertex AI models to their limit of 16384
     max_tokens = anthropic_request.max_tokens
-    if anthropic_request.model.startswith("openai/") or anthropic_request.model.startswith("gemini/"):
+    if anthropic_request.model.startswith("openai/") or anthropic_request.model.startswith("gemini/") or anthropic_request.model.startswith("aiplatform/"):
         max_tokens = min(max_tokens, 16384)
-        logger.debug(f"Capping max_tokens to 16384 for OpenAI/Gemini model (original value: {anthropic_request.max_tokens})")
+        logger.debug(f"Capping max_tokens to 16384 for OpenAI/Gemini/AIplatform model (original value: {anthropic_request.max_tokens})")
     
     # Create LiteLLM request dict
     litellm_request = {
@@ -1104,17 +1147,295 @@ async def create_message(
         # Determine which API key to use based on the model
         if request.model.startswith("openai/"):
             litellm_request["api_key"] = OPENAI_API_KEY
-            logger.debug(f"Using OpenAI API key for model: {request.model}")
+            logger.info(f"Using OpenAI API key for model: {request.model}")
         elif request.model.startswith("gemini/"):
             litellm_request["api_key"] = GEMINI_API_KEY
-            logger.debug(f"Using Gemini API key for model: {request.model}")
+            logger.info(f"Using Gemini API key for model: {request.model}")
+        elif request.model.startswith("aiplatform/"):
+            # For AIplatform, we use the credentials we got from the authenticator
+            if AIPLATFORM_ENABLED and aiplatform_credentials:
+                try:
+                    logger.info(f"Using direct Thomson Reuters AIplatform integration (bypassing LiteLLM)")
+                    
+                    # Extract model name without the prefix
+                    if request.model.startswith("aiplatform/"):
+                        clean_model_name = request.model.replace("aiplatform/", "")
+                    else:
+                        # Get the model name portion after the last slash if it exists
+                        clean_model_name = request.model.split("/")[-1]
+                    
+                    # Import Vertex AI components
+                    import vertexai
+                    from vertexai.generative_models import GenerativeModel, ChatSession
+                    
+                    # Initialize Vertex AI with our authenticated credentials
+                    vertexai.init(project=aiplatform_project_id, location=aiplatform_location, credentials=aiplatform_credentials)
+                    logger.info(f"Initialized Vertex AI with project={aiplatform_project_id}, location={aiplatform_location}")
+                    
+                    # Create a direct Vertex AI integration function that will be called instead of litellm.completion
+                    async def direct_vertexai_completion(request_data):
+                        """Direct interaction with Vertex AI, bypassing LiteLLM"""
+                        logger.info(f"Direct Vertex AI request for model: {clean_model_name}")
+                        
+                        try:
+                            # Create the Vertex AI model
+                            model = GenerativeModel(clean_model_name)
+                            
+                            # Get the messages from the LiteLLM request
+                            messages = request_data.get("messages", [])
+                            
+                            # Start a chat session
+                            chat = model.start_chat(response_validation=False)
+                            
+                            # Process the messages to build the conversation history
+                            # We need to handle system message and user/assistant messages
+                            system_message = None
+                            history = []
+                            
+                            for msg in messages:
+                                role = msg.get("role")
+                                content = msg.get("content", "")
+                                
+                                # Handle system message
+                                if role == "system":
+                                    system_message = content if isinstance(content, str) else str(content)
+                                # Build conversation history
+                                elif role in ["user", "assistant"]:
+                                    if isinstance(content, str):
+                                        history.append({"role": role, "content": content})
+                                    else:
+                                        # Convert complex content to text
+                                        if isinstance(content, list):
+                                            text_content = ""
+                                            for item in content:
+                                                if isinstance(item, dict):
+                                                    if item.get("type") == "text":
+                                                        text_content += item.get("text", "") + "\n"
+                                            history.append({"role": role, "content": text_content.strip()})
+                            
+                            # Find the last user message which we'll send to the model
+                            last_user_msg = None
+                            for msg in reversed(history):
+                                if msg["role"] == "user":
+                                    last_user_msg = msg["content"]
+                                    break
+                            
+                            if not last_user_msg:
+                                raise ValueError("No user message found in the conversation")
+                            
+                            # Construct the complete prompt with system message if available
+                            prompt = last_user_msg
+                            if system_message:
+                                prompt = f"{system_message}\n\n{prompt}"
+                            
+                            # If streaming is enabled
+                            if request_data.get("stream", False):
+                                # Create a generator that yields responses as they come
+                                async def generate_responses():
+                                    """Generate Anthropic-style streaming responses using content blocks and deltas."""
+                                    # Call the model (non-streaming for simplicity)
+                                    try:
+                                        response = chat.send_message(prompt)
+                                        
+                                        # Get the response text
+                                        response_text = response.text
+                                        
+                                        # Simulate Anthropic streaming format for the handle_streaming function
+                                        
+                                        # 1. Generate message_start event
+                                        message_id = f"msg_{uuid.uuid4().hex[:24]}"
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {"anthropic_event": "message_start", "message": {
+                                                        "id": message_id,
+                                                        "type": "message",
+                                                        "role": "assistant",
+                                                        "content": [],
+                                                        "model": clean_model_name
+                                                    }},
+                                                    "index": 0,
+                                                    "finish_reason": None
+                                                }
+                                            ],
+                                            "created": int(time.time()),
+                                            "model": clean_model_name,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                        
+                                        # 2. Generate content_block_start event
+                                        block_id = 0
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {"anthropic_event": "content_block_start", "index": block_id, "content_block": {
+                                                        "type": "text",
+                                                        "text": ""
+                                                    }},
+                                                    "index": 0,
+                                                    "finish_reason": None
+                                                }
+                                            ],
+                                            "created": int(time.time()),
+                                            "model": clean_model_name,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                        
+                                        # 3. Generate ping event (common in Anthropic streams)
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {"anthropic_event": "ping"},
+                                                    "index": 0,
+                                                    "finish_reason": None
+                                                }
+                                            ],
+                                            "created": int(time.time()),
+                                            "model": clean_model_name,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                        
+                                        # 4. Stream the response in small chunks with content_block_delta events
+                                        chunk_size = 4  # Small chunk size for smoother streaming
+                                        for i in range(0, len(response_text), chunk_size):
+                                            chunk = response_text[i:i+chunk_size]
+                                            yield {
+                                                "choices": [
+                                                    {
+                                                        "delta": {"anthropic_event": "content_block_delta", "index": block_id, "delta": {
+                                                            "type": "text_delta",
+                                                            "text": chunk
+                                                        }},
+                                                        "index": 0,
+                                                        "finish_reason": None
+                                                    }
+                                                ],
+                                                "created": int(time.time()),
+                                                "model": clean_model_name,
+                                                "object": "chat.completion.chunk"
+                                            }
+                                            
+                                            # Small delay for more natural streaming
+                                            await asyncio.sleep(0.01)
+                                        
+                                        # 5. Generate content_block_stop event
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {"anthropic_event": "content_block_stop", "index": block_id},
+                                                    "index": 0,
+                                                    "finish_reason": None
+                                                }
+                                            ],
+                                            "created": int(time.time()),
+                                            "model": clean_model_name,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                        
+                                        # 6. Generate message_delta event
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {"anthropic_event": "message_delta", "delta": {
+                                                        "stop_reason": "end_turn",
+                                                        "stop_sequence": None
+                                                    }, "usage": {"output_tokens": len(response_text) // 4}},
+                                                    "index": 0,
+                                                    "finish_reason": None
+                                                }
+                                            ],
+                                            "created": int(time.time()),
+                                            "model": clean_model_name,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                        
+                                        # 7. Generate message_stop event
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {"anthropic_event": "message_stop"},
+                                                    "index": 0,
+                                                    "finish_reason": "stop"
+                                                }
+                                            ],
+                                            "created": int(time.time()),
+                                            "model": clean_model_name,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                    except Exception as e:
+                                        logger.error(f"Error in streaming generation: {e}", exc_info=True)
+                                        # If there's an error, still try to emit some events to avoid hanging clients
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {"content": f"Error: {str(e)}"},
+                                                    "index": 0,
+                                                    "finish_reason": "stop"
+                                                }
+                                            ],
+                                            "created": int(time.time()),
+                                            "model": clean_model_name,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                
+                                return generate_responses()
+                            else:
+                                # For non-streaming requests
+                                response = chat.send_message(prompt)
+                                
+                                # Convert to LiteLLM format for compatibility with the rest of code
+                                return {
+                                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                                    "object": "chat.completion",
+                                    "created": int(time.time()),
+                                    "model": clean_model_name,
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "message": {
+                                                "role": "assistant",
+                                                "content": response.text
+                                            },
+                                            "finish_reason": "stop"
+                                        }
+                                    ],
+                                    "usage": {
+                                        "prompt_tokens": len(prompt) // 4,  # Rough estimation
+                                        "completion_tokens": len(response.text) // 4,  # Rough estimation
+                                        "total_tokens": (len(prompt) + len(response.text)) // 4  # Rough estimation
+                                    }
+                                }
+                        
+                        except Exception as e:
+                            logger.error(f"Error in direct Vertex AI integration: {e}", exc_info=True)
+                            raise
+                    
+                    # Store the direct completion function in a global variable
+                    request._aiplatform_direct = direct_vertexai_completion
+                    
+                    # We'll check for this attribute later when deciding whether to use litellm or direct vertexai
+                    litellm_request["aiplatform_direct"] = True
+                    
+                    logger.info(f"Direct AIplatform integration ready for {clean_model_name}")
+                
+                except Exception as e:
+                    logger.error(f"Error setting up AIplatform auth: {e}", exc_info=True)
+                    # Fall back to using the Gemini API key
+                    litellm_request["model"] = litellm_request["model"].replace("aiplatform/", "gemini/").replace("vertex_ai/", "gemini/")
+                    litellm_request["api_key"] = GEMINI_API_KEY
+                    logger.warning(f"AIplatform configuration failed, falling back to Gemini API key for model: {request.model}")
+            else:
+                # Fall back to using the Gemini API key if AIplatform authentication failed
+                litellm_request["model"] = litellm_request["model"].replace("aiplatform/", "gemini/")
+                litellm_request["api_key"] = GEMINI_API_KEY
+                logger.warning(f"AIplatform authentication failed, falling back to Gemini API key for model: {request.model}")
         else:
             litellm_request["api_key"] = ANTHROPIC_API_KEY
             logger.debug(f"Using Anthropic API key for model: {request.model}")
         
         # For OpenAI models - modify request format to work with limitations
-        if "openai" in litellm_request["model"] and "messages" in litellm_request:
-            logger.debug(f"Processing OpenAI model request: {litellm_request['model']}")
+        if ("openai" in litellm_request["model"] or "vertex_ai" in litellm_request["model"]) and "messages" in litellm_request:
+            logger.debug(f"Processing OpenAI/Vertex AI model request: {litellm_request['model']}")
             
             # For OpenAI models, we need to convert content blocks to simple strings
             # and handle other requirements
@@ -1255,7 +1576,7 @@ async def create_message(
         
         # Handle streaming mode
         if request.stream:
-            # Use LiteLLM for streaming
+            # Use LiteLLM for streaming, unless we're using AIplatform directly
             num_tools = len(request.tools) if request.tools else 0
             
             log_request_beautifully(
@@ -1267,15 +1588,26 @@ async def create_message(
                 num_tools,
                 200  # Assuming success at this point
             )
-            # Ensure we use the async version for streaming
-            response_generator = await litellm.acompletion(**litellm_request)
+            
+            # Check if we have a direct AIplatform integration to use
+            if hasattr(request, "_aiplatform_direct") and litellm_request.get("aiplatform_direct"):
+                logger.info("Using direct AIplatform integration for streaming")
+                # Get the direct completion function
+                direct_vertexai_completion_fn = request._aiplatform_direct
+                # Call it with the request data
+                response_generator = await direct_vertexai_completion_fn(litellm_request)
+            else:
+                # Use standard LiteLLM for other providers
+                # Ensure we use the async version for streaming
+                logger.info("Using LiteLLM for streaming")
+                response_generator = await litellm.acompletion(**litellm_request)
             
             return StreamingResponse(
                 handle_streaming(response_generator, request),
                 media_type="text/event-stream"
             )
         else:
-            # Use LiteLLM for regular completion
+            # Use LiteLLM for regular completion, unless we're using AIplatform directly
             num_tools = len(request.tools) if request.tools else 0
             
             log_request_beautifully(
@@ -1287,8 +1619,21 @@ async def create_message(
                 num_tools,
                 200  # Assuming success at this point
             )
+            
             start_time = time.time()
-            litellm_response = litellm.completion(**litellm_request)
+            
+            # Check if we have a direct AIplatform integration to use
+            if hasattr(request, "_aiplatform_direct") and litellm_request.get("aiplatform_direct"):
+                logger.info("Using direct AIplatform integration for completion")
+                # Get the direct completion function
+                direct_vertexai_completion_fn = request._aiplatform_direct
+                # Call it with the request data
+                litellm_response = await direct_vertexai_completion_fn(litellm_request)
+            else:
+                # Use standard LiteLLM for other providers
+                logger.info("Using LiteLLM for completion")
+                litellm_response = litellm.completion(**litellm_request)
+                
             logger.debug(f"✅ RESPONSE RECEIVED: Model={litellm_request.get('model')}, Time={time.time() - start_time:.2f}s")
             
             # Convert LiteLLM response to Anthropic format

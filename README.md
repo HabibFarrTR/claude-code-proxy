@@ -38,13 +38,21 @@ A proxy server that lets you use Anthropic clients with Gemini or OpenAI models 
    *   `ANTHROPIC_API_KEY`: (Optional) Needed only if proxying *to* Anthropic models.
    *   `OPENAI_API_KEY`: Your OpenAI API key (Required if using OpenAI models as fallback or primary).
    *   `GEMINI_API_KEY`: Your Google AI Studio (Gemini) API key (Required if using the default Gemini preference).
-   *   `PREFERRED_PROVIDER` (Optional): Set to `google` (default) or `openai`. This determines the primary backend for mapping `haiku`/`sonnet`.
+   *   `PREFERRED_PROVIDER` (Optional): Set to `google` (default), `openai`, or `aiplatform`. This determines the primary backend for mapping `haiku`/`sonnet`.
    *   `BIG_MODEL` (Optional): The model to map `sonnet` requests to. Defaults to `gemini-2.5-pro-preview-03-25` (if `PREFERRED_PROVIDER=google` and model is known) or `gpt-4o`.
    *   `SMALL_MODEL` (Optional): The model to map `haiku` requests to. Defaults to `gemini-2.0-flash` (if `PREFERRED_PROVIDER=google` and model is known) or `gpt-4o-mini`.
 
+   **AIplatform Configuration (Thomson Reuters):**
+   *   `WORKSPACE_ID`: Your Thomson Reuters AIplatform workspace ID.
+   *   `AUTH_URL`: Authentication URL for Thomson Reuters AIplatform (default: "https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token").
+   *   `MODEL_NAME`: The model name to use with AIplatform (should match BIG_MODEL).
+
    **Mapping Logic:**
    - If `PREFERRED_PROVIDER=google` (default), `haiku`/`sonnet` map to `SMALL_MODEL`/`BIG_MODEL` prefixed with `gemini/` *if* those models are in the server's known `GEMINI_MODELS` list.
+   - If `PREFERRED_PROVIDER=aiplatform`, `haiku`/`sonnet` map to `SMALL_MODEL`/`BIG_MODEL` prefixed with `aiplatform/` *if* those models are in the server's known `GEMINI_MODELS` list.
    - Otherwise (if `PREFERRED_PROVIDER=openai` or the specified Google model isn't known), they map to `SMALL_MODEL`/`BIG_MODEL` prefixed with `openai/`.
+   
+   **IMPORTANT**: For AIplatform provider, you must run `mltools-cli aws-login` before starting the server to set up AWS credentials.
 
 4. **Run the server**:
    ```bash
@@ -154,6 +162,36 @@ This proxy works by:
 
 The proxy handles both streaming and non-streaming responses, maintaining compatibility with all Claude clients. 🌊
 
+## Testing 🧪
+
+The project includes comprehensive tests for both streaming and non-streaming functionality, supporting all providers.
+
+### Running Tests
+
+We provide a convenient test script that handles server startup and cleanup automatically:
+
+```bash
+# Run all tests
+./run_tests.sh
+
+# Run only tests for a specific provider
+./run_tests.sh -t test_anthropic
+./run_tests.sh -t test_aiplatform
+
+# Skip authentication tests (useful if you don't have credentials)
+./run_tests.sh --skip-auth
+
+# Show full server logs
+./run_tests.sh -v
+```
+
+For AIplatform tests, make sure you've run `mltools-cli aws-login` first to set up your AWS credentials.
+
 ## Contributing 🤝
 
 Contributions are welcome! Please feel free to submit a Pull Request. 🎁
+
+When contributing code:
+1. Make sure all tests pass with both standard and AIplatform providers
+2. Update documentation as needed
+3. Follow the existing code style
