@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Comprehensive test suite for AI Model Proxy.
+Test suite for Thomson Reuters AIplatform Proxy.
 
-This script provides tests for both streaming and non-streaming requests,
-with various scenarios including tool use, multi-turn conversations,
-and content blocks. It supports multiple providers including Anthropic,
-OpenAI, Google's Gemini, and Thomson Reuters' AIplatform service.
+This script provides tests for both streaming and non-streaming requests
+with Thomson Reuters' AIplatform service, including tool use and basic functionality.
 
 Usage:
   pytest -xvs tests/test_server.py                  # Run all tests
-  pytest -xvs tests/test_server.py::test_aiplatform # Test AIplatform provider
-  pytest -xvs tests/test_server.py::test_anthropic  # Test Anthropic provider
+  pytest -xvs tests/test_server.py::test_aiplatform # Test basic functionality
+  pytest -xvs tests/test_server.py::test_aiplatform_with_tools # Test tool usage
+  pytest -xvs tests/test_server.py::test_aiplatform_streaming # Test streaming
 """
 
 import json
@@ -26,21 +25,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-PROXY_API_KEY = os.environ.get("ANTHROPIC_API_KEY")  # Using same key for proxy
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 PROXY_API_URL = "http://localhost:8082/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_VERSION = "2023-06-01"  # Still using Anthropic API format
 
-# Headers for the different services
-anthropic_headers = {
-    "x-api-key": ANTHROPIC_API_KEY or "test-key",
-    "anthropic-version": ANTHROPIC_VERSION,
-    "content-type": "application/json",
-}
-
+# Headers for the proxy
 proxy_headers = {
-    "x-api-key": PROXY_API_KEY or "test-key",
+    "x-api-key": "test-key",
     "anthropic-version": ANTHROPIC_VERSION,
     "content-type": "application/json",
 }
@@ -90,12 +80,6 @@ REQUIRED_EVENT_TYPES = {
 }
 
 # Test fixtures
-
-
-@pytest.fixture
-def anthropic_model():
-    """Get the appropriate Anthropic model to test with."""
-    return "claude-3-sonnet-20240229"
 
 
 @pytest.fixture
@@ -382,85 +366,6 @@ def validate_stream_stats(stats):
 
 
 # Test cases for different providers
-
-
-@pytest.mark.asyncio
-async def test_anthropic(anthropic_model):
-    """Test basic Anthropic model functionality."""
-
-    # Skip test if no API key
-    if not ANTHROPIC_API_KEY:
-        pytest.skip("Anthropic API key not set in environment")
-
-    # Basic request with no tools
-    data = {
-        "model": anthropic_model,
-        "max_tokens": 300,
-        "messages": [{"role": "user", "content": "Hello, world! Can you tell me about Paris in 2-3 sentences?"}],
-    }
-
-    response = get_response(PROXY_API_URL, proxy_headers, data)
-
-    # Verify response code
-    assert response.status_code == 200, f"Request failed with status {response.status_code}"
-
-    # Validate response
-    assert compare_responses(response)
-
-
-@pytest.mark.asyncio
-async def test_anthropic_with_tools(anthropic_model):
-    """Test Anthropic model with tools."""
-
-    # Skip test if no API key
-    if not ANTHROPIC_API_KEY:
-        pytest.skip("Anthropic API key not set in environment")
-
-    # Request with calculator tool
-    data = {
-        "model": anthropic_model,
-        "max_tokens": 300,
-        "messages": [{"role": "user", "content": "What is 135 + 7.5 divided by 2.5?"}],
-        "tools": [calculator_tool],
-        "tool_choice": {"type": "auto"},
-    }
-
-    response = get_response(PROXY_API_URL, proxy_headers, data)
-
-    # Verify response code
-    assert response.status_code == 200, f"Request failed with status {response.status_code}"
-
-    # Validate response
-    assert compare_responses(response, check_tools=True)
-
-
-@pytest.mark.asyncio
-async def test_anthropic_streaming(anthropic_model):
-    """Test Anthropic model with streaming."""
-
-    # Skip test if no API key
-    if not ANTHROPIC_API_KEY:
-        pytest.skip("Anthropic API key not set in environment")
-
-    # Streaming request
-    data = {
-        "model": anthropic_model,
-        "max_tokens": 100,
-        "stream": True,
-        "messages": [{"role": "user", "content": "Count from 1 to 5, with one number per line."}],
-    }
-
-    # Process the streaming response
-    stats, error = await stream_response(PROXY_API_URL, proxy_headers, data, "Anthropic")
-
-    # Print statistics
-    stats.summarize()
-
-    # Verify there was no error
-    assert not error, f"Streaming request failed: {error}"
-
-    # Validate the stream stats
-    assert validate_stream_stats(stats)
 
 
 @pytest.mark.asyncio
