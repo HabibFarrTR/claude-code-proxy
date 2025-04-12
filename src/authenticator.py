@@ -12,7 +12,6 @@ logger = get_logger()
 
 class AuthenticationError(Exception):
     """Custom exception for authentication failures."""
-
     pass
 
 
@@ -24,7 +23,7 @@ def get_gemini_credentials():
     Raises: AuthenticationError
     """
     workspace_id = os.getenv("WORKSPACE_ID")
-    model_name_for_auth = os.getenv("MODEL_NAME", GEMINI_BIG_MODEL)  # Use configured BIG model for auth by default
+    model_name_for_auth = os.getenv("GEMINI_BIG_MODEL", GEMINI_BIG_MODEL)
     auth_url = os.getenv("AUTH_URL")
 
     if not all([workspace_id, auth_url]):

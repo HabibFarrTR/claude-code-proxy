@@ -53,7 +53,7 @@ if success_flag == 1:
 ```
 I have attached my code as server.py
 The code was originally a fork of https://github.com/1rgs/claude-code-proxy which uses LiteLLM https://github.com/BerriAI/litellm
-but since I needed to make LiteLLM work with our internal auth, I had to do some deep surgery on the code and 
+but since I needed to make LiteLLM work with our internal auth, I had to do some deep surgery on the code and
 dropping the support for external providers as they are not allowed within my company.
 A key finding is the Gemeni API allows only one tool use at a time.
 
@@ -648,7 +648,7 @@ create_time {
 response_id: "jsP6Z_aJJtCXm9IP8rf_kAM"
 
 2025-04-12 15:48:30,961 - AnthropicGeminiProxy - INFO - [req_d8f32e90cf51] Received Vertex usage metadata: {'prompt_tokens': 82, 'completion_tokens': 26, 'total_tokens': 108}
-2025-04-12 15:48:30,962 - AnthropicGeminiProxy - INFO - [req_d8f32e90cf51] Received Vertex finish reason enum: STOP, Message: 
+2025-04-12 15:48:30,962 - AnthropicGeminiProxy - INFO - [req_d8f32e90cf51] Received Vertex finish reason enum: STOP, Message:
 2025-04-12 15:48:30,962 - AnthropicGeminiProxy - DEBUG - [req_d8f32e90cf51] Vertex text delta: '": "Chat Handler Logging"
 }
 ```...'
@@ -696,7 +696,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
 2025-04-12 15:49:05,001 - AnthropicGeminiProxy - INFO - [req_93aff51cc735] Received Vertex usage metadata: {'prompt_tokens': 26754, 'completion_tokens': 0, 'total_tokens': 26754}
 2025-04-12 15:49:05,002 - AnthropicGeminiProxy - INFO - [req_93aff51cc735] Received Vertex finish reason enum: MALFORMED_FUNCTION_CALL, Message: Malformed function call: print(default_api.BatchTool(description="Add logging statements to chat_handler.py", invocations=[default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
             logging.info(f"ChatHandler initialized for model: {model_name}")
-        
+
         # Resource tracking for reattachment""", new_string="""\
             logging.info(f"ChatHandler initialized for model: {model_name}")
             logging.debug(f"Initial settings: temperature={self.temperature}, max_tokens={self.max_tokens}")
@@ -795,7 +795,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
 
         # Basic URL validation"""), default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
                 self.resource_history.append(resource_info)
-                
+
             print("Attached content from URL. It will be included in the next message.")""", new_string="""\
                 self.resource_history.append(resource_info)
 
@@ -844,7 +844,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
         logging.info(f"Attempting chat history compaction. Preserve: {preserve_percent}%, Reattach: {reattach_all}, Instructions: {instructions is not None}")
         if not self.chat or not self.chat.history:"""), default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
             print(f"\\nChat history compacted successfully. Reduced by approximately {token_diff} tokens.")
-            
+
             # Offer reattachment options""", new_string="""\
             logging.info(f"Chat history compacted. Summarized: {len(summarize_messages)}, Preserved: {len(preserve_messages)}. Token diff: ~{token_diff}. Compaction count: {self.compaction_count}")
             print(f"\\nChat history compacted successfully. Reduced by approximately {token_diff} tokens.")
@@ -872,7 +872,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
         logging.info("Attempting to reattach all recent resources.")
         if not self.resource_history:"""), default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
                 print(f"Error reattaching resource {i+1}: {e}")
-                
+
         print(f"Reattached {count} resources.")""", new_string="""\
                 print(f"Error reattaching resource {i+1}: {e}")
 
@@ -905,7 +905,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
         help_text = \"\"\"""")])
 2025-04-12 15:49:05,009 - AnthropicGeminiProxy - ERROR - [req_93aff51cc735] MALFORMED_FUNCTION_CALL detected by Vertex API. Message: Malformed function call: print(default_api.BatchTool(description="Add logging statements to chat_handler.py", invocations=[default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
             logging.info(f"ChatHandler initialized for model: {model_name}")
-        
+
         # Resource tracking for reattachment""", new_string="""\
             logging.info(f"ChatHandler initialized for model: {model_name}")
             logging.debug(f"Initial settings: temperature={self.temperature}, max_tokens={self.max_tokens}")
@@ -1004,7 +1004,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
 
         # Basic URL validation"""), default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
                 self.resource_history.append(resource_info)
-                
+
             print("Attached content from URL. It will be included in the next message.")""", new_string="""\
                 self.resource_history.append(resource_info)
 
@@ -1053,7 +1053,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
         logging.info(f"Attempting chat history compaction. Preserve: {preserve_percent}%, Reattach: {reattach_all}, Instructions: {instructions is not None}")
         if not self.chat or not self.chat.history:"""), default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
             print(f"\\nChat history compacted successfully. Reduced by approximately {token_diff} tokens.")
-            
+
             # Offer reattachment options""", new_string="""\
             logging.info(f"Chat history compacted. Summarized: {len(summarize_messages)}, Preserved: {len(preserve_messages)}. Token diff: ~{token_diff}. Compaction count: {self.compaction_count}")
             print(f"\\nChat history compacted successfully. Reduced by approximately {token_diff} tokens.")
@@ -1081,7 +1081,7 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
         logging.info("Attempting to reattach all recent resources.")
         if not self.resource_history:"""), default_api.Edit(file_path="/Users/a6133790/workspace/llm-chat/src/chat_handler.py", old_string="""\
                 print(f"Error reattaching resource {i+1}: {e}")
-                
+
         print(f"Reattached {count} resources.")""", new_string="""\
                 print(f"Error reattaching resource {i+1}: {e}")
 
@@ -1130,5 +1130,5 @@ response_id: "jsP6Z5CTNuGWsbQPgoOu0AI"
 
 
 ```
-It has been fun, and I am close, and i think the proxy is working well. However, the Gemini model is not able to 
+It has been fun, and I am close, and i think the proxy is working well. However, the Gemini model is not able to
 handle the function calls well, and would love to see what your perspective is.

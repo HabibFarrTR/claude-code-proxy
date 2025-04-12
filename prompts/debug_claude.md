@@ -50,7 +50,7 @@ if success_flag == 1:
     response = chat.send_message(prompt)
     print(response.text)
 ```
-The bug is that from claude code ui sometime I get the right answer and sometimes something like this: 
+The bug is that from claude code ui sometime I get the right answer and sometimes something like this:
 ```python
 $ ANTHROPIC_BASE_URL=http://localhost:8082 claude
 ╭────────────────────────────────────────────╮

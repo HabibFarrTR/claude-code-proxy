@@ -11,7 +11,7 @@ def test_authenticator():
     load_dotenv()
 
     # Verify environment variables are set
-    required_vars = ["WORKSPACE_ID", "MODEL_NAME", "AUTH_URL"]
+    required_vars = ["WORKSPACE_ID", "BIG_MODEL", "SMALL_MODEL", "AUTH_URL"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
 
     if missing_vars:

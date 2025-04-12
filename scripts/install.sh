@@ -304,7 +304,8 @@ WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
 
 # Optional settings with defaults
 AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
 
 # The proxy will automatically map:
 # - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
@@ -411,7 +412,8 @@ WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
 
 # Optional settings with defaults
 AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
 
 # The proxy will automatically map:
 # - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
@@ -435,7 +437,8 @@ WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
 
 # Optional settings with defaults
 AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
 
 # The proxy will automatically map:
 # - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
@@ -665,8 +668,8 @@ WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
 
 # Optional settings with defaults
 AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
-
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
 # The proxy will automatically map:
 # - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
 # - claude-3-haiku → gemini-2.0-flash
@@ -685,8 +688,8 @@ EOF
 WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
 
 # Optional settings with defaults
-AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
 
 # The proxy will automatically map:
 # - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
@@ -712,7 +715,8 @@ WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
 
 # Optional settings with defaults
 AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
 
 # The proxy will automatically map:
 # - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
