@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -1094,7 +1095,6 @@ async def handle_streaming(response_generator: AsyncGenerator[Dict[str, Any], No
 
 
 # +++ NEW: Adapter for Vertex AI stream to LiteLLM/OpenAI stream format +++
-
 async def adapt_vertex_stream_to_litellm(
     vertex_stream: AsyncGenerator[GenerationResponse, None],
     request_id: str,
@@ -1104,11 +1104,14 @@ async def adapt_vertex_stream_to_litellm(
     Adapts the native Vertex AI SDK stream chunks (GenerationResponse)
     to the OpenAI streaming chunk format expected by handle_streaming.
     Handles parts containing either text or function calls safely.
+    Injects an error message for MALFORMED_FUNCTION_CALL finish reason.
     """
     logger.info(f"[{request_id}] Starting Vertex AI stream adaptation...")
     current_tool_calls = {}
     openai_tool_index_counter = 0
     tool_call_emitted_in_stream = False # Flag to track if any tool call was processed
+    malformed_call_detected = False
+    malformed_call_message = None
 
     try:
         async for chunk in vertex_stream:
@@ -1118,6 +1121,7 @@ async def adapt_vertex_stream_to_litellm(
             delta_tool_calls = []
             vertex_finish_reason_enum = None
             usage_metadata = None
+            chunk_finish_message = None # Store finish message if present
 
             # --- Check for Usage Metadata ---
             if chunk.usage_metadata:
@@ -1132,13 +1136,24 @@ async def adapt_vertex_stream_to_litellm(
             if chunk.candidates:
                 candidate = chunk.candidates[0]
 
-                # Store the raw Vertex finish reason if present
+                # Store the raw Vertex finish reason and message if present
                 if candidate.finish_reason and candidate.finish_reason != FinishReason.FINISH_REASON_UNSPECIFIED:
                     vertex_finish_reason_enum = candidate.finish_reason
-                    logger.info(f"[{request_id}] Received Vertex finish reason enum: {vertex_finish_reason_enum.name}")
+                    chunk_finish_message = getattr(candidate, 'finish_message', None) # Get finish message safely
+                    logger.info(f"[{request_id}] Received Vertex finish reason enum: {vertex_finish_reason_enum.name}, Message: {chunk_finish_message}")
 
-                # Process Parts for Content and Tool Calls
-                if candidate.content and candidate.content.parts:
+                    # *** NEW: Detect Malformed Function Call ***
+                    if vertex_finish_reason_enum == FinishReason.MALFORMED_FUNCTION_CALL:
+                        malformed_call_detected = True
+                        malformed_call_message = chunk_finish_message
+                        logger.error(f"[{request_id}] MALFORMED_FUNCTION_CALL detected by Vertex API. Message: {malformed_call_message}")
+                        # Do not process parts in this chunk if it's the final error chunk
+                        # The API likely doesn't include valid parts alongside this error.
+                        # We will handle yielding an error message later, before the final chunk.
+
+                # Process Parts for Content and Tool Calls ONLY IF no malformed call detected in *this chunk*
+                # (It's possible to get content chunks *before* the final error chunk)
+                if not malformed_call_detected and candidate.content and candidate.content.parts:
                     for part_index, part in enumerate(candidate.content.parts):
                         # --- Safely check for text or function_call ---
                         part_processed = False
@@ -1158,6 +1173,7 @@ async def adapt_vertex_stream_to_litellm(
                                 fc = current_function_call
                                 tool_call_id = f"toolu_{uuid.uuid4().hex[:12]}"
                                 try:
+                                    # Ensure args is serializable, default to empty dict string if None/empty
                                     args_str = json.dumps(fc.args) if fc.args else "{}"
                                 except Exception as e:
                                      logger.error(f"[{request_id}] Failed to dump streaming function call args to JSON: {e}. Args: {fc.args}")
@@ -1169,6 +1185,7 @@ async def adapt_vertex_stream_to_litellm(
                                     "function": {"name": fc.name, "arguments": args_str}
                                 }
                                 delta_tool_calls.append(openai_tool_call)
+                                # Store info needed for potential future reference if needed (though not currently used downstream)
                                 current_tool_calls[part_index] = {"id": tool_call_id, "name": fc.name, "args": args_str, "openai_index": openai_tool_index_counter}
                                 logger.debug(f"[{request_id}] Vertex tool call delta: index={openai_tool_index_counter}, id={tool_call_id}, name={fc.name}, args='{args_str[:50]}...'")
                                 openai_tool_index_counter += 1
@@ -1176,65 +1193,151 @@ async def adapt_vertex_stream_to_litellm(
                             except AttributeError:
                                 # .function_call also failed. Log an unknown part type.
                                 logger.warning(f"[{request_id}] Unknown or unexpected part type encountered in Vertex stream chunk (not text or function_call): {part}")
+                            except Exception as e:
+                                 # Catch any other unexpected error during part processing
+                                 logger.error(f"[{request_id}] Unexpected error processing function call part {part_index}: {e}", exc_info=True)
                         except Exception as e:
                              # Catch any other unexpected error during part processing
                              logger.error(f"[{request_id}] Unexpected error processing part {part_index}: {e}", exc_info=True)
 
             # --- Construct and Yield the LiteLLM/OpenAI Delta Chunk ---
-            # (This logic remains the same as before)
+            # Only yield if we have content/tool calls OR if it's the final chunk with usage/finish reason
             openai_delta_for_choice = {}
             if delta_content is not None: openai_delta_for_choice["content"] = delta_content
             if delta_tool_calls: openai_delta_for_choice["tool_calls"] = delta_tool_calls
+            # Add role only if there's content or tool calls in this delta
             if openai_delta_for_choice: openai_delta_for_choice["role"] = "assistant"
 
+            # Yield chunk if it contains actual delta content or tool calls
             if openai_delta_for_choice:
                 litellm_chunk = {
                     "id": f"chatcmpl-adap-{request_id}", "object": "chat.completion.chunk", "created": int(time.time()),
                     "model": model_id_for_chunk,
                     "choices": [{"index": 0, "delta": openai_delta_for_choice, "finish_reason": None, "logprobs": None}],
-                    "usage": None
+                    "usage": None # Usage usually comes in the final chunk
                 }
                 logger.debug(f"[{request_id}] Yielding adapted LiteLLM chunk: {litellm_chunk}")
                 yield litellm_chunk
 
-            # --- Yield Final Chunk if Vertex Finish Reason Received ---
-            # (This logic remains the same as before)
+            # --- Check if this chunk signals the end (either normally or via malformed call) ---
             if vertex_finish_reason_enum:
+                 # *** NEW: Yield Error Message BEFORE Final Chunk if Malformed Call ***
+                 if malformed_call_detected:
+                      error_message = "[Proxy Error: The model generated an invalid tool call and could not complete the request. Please try rephrasing.]"
+                      # Optionally include part of the raw error if useful for debugging, but keep it concise for the user
+                      # if malformed_call_message:
+                      #    error_message += f" (Details: {malformed_call_message[:100]}...)"
+
+                      error_delta = {"role": "assistant", "content": error_message}
+                      error_chunk = {
+                          "id": f"chatcmpl-adap-{request_id}", "object": "chat.completion.chunk", "created": int(time.time()),
+                          "model": model_id_for_chunk,
+                          "choices": [{"index": 0, "delta": error_delta, "finish_reason": None, "logprobs": None}],
+                          "usage": None
+                      }
+                      logger.warning(f"[{request_id}] Yielding injected error message chunk due to MALFORMED_FUNCTION_CALL.")
+                      yield error_chunk
+
+                 # --- Determine and Yield Final Chunk ---
                  final_openai_finish_reason = "stop" # Default
-                 if tool_call_emitted_in_stream:
-                      final_openai_finish_reason = "tool_calls"
-                      logger.info(f"[{request_id}] Setting final finish_reason to 'tool_calls' because tool calls were emitted.")
+
+                 # IMPORTANT: Check if the *reason* indicates tool calls should have happened,
+                 # even if the call itself was malformed. Gemini might use OTHER or STOP even
+                 # when attempting a call that fails validation.
+                 # Let's prioritize the malformed detection.
+                 if malformed_call_detected:
+                      # Map malformed call to 'stop' for OpenAI format, but the text message above explains the real issue.
+                      final_openai_finish_reason = "stop"
+                      logger.info(f"[{request_id}] Mapping final Vertex finish_reason MALFORMED_FUNCTION_CALL -> 'stop' (error message injected separately)")
+                 elif tool_call_emitted_in_stream:
+                      # If valid tool calls were successfully emitted earlier in the stream, AND the finish reason isn't something overriding like MAX_TOKENS or SAFETY
+                      # It's *possible* the final finish reason from Vertex could still be STOP even after a successful tool call part.
+                      # Let's make the finish reason 'tool_calls' if we emitted any, unless it's explicitly MAX_TOKENS or SAFETY.
+                      if vertex_finish_reason_enum not in [FinishReason.MAX_TOKENS, FinishReason.SAFETY, FinishReason.RECITATION]:
+                           final_openai_finish_reason = "tool_calls"
+                           logger.info(f"[{request_id}] Setting final finish_reason to 'tool_calls' because valid tool calls were emitted.")
+                      else:
+                           # Map MAX_TOKENS/SAFETY/RECITATION appropriately
+                           finish_reason_map = {
+                               FinishReason.MAX_TOKENS.name: "length",
+                               FinishReason.SAFETY.name: "content_filter",
+                               FinishReason.RECITATION.name: "content_filter",
+                           }
+                           final_openai_finish_reason = finish_reason_map.get(vertex_finish_reason_enum.name, "stop")
+                           logger.info(f"[{request_id}] Mapping final Vertex finish_reason {vertex_finish_reason_enum.name} -> {final_openai_finish_reason} (despite prior tool calls)")
                  else:
+                      # No tool calls emitted, map normal finish reasons
                       finish_reason_map = {
                           FinishReason.STOP.name: "stop", FinishReason.MAX_TOKENS.name: "length",
                           FinishReason.SAFETY.name: "content_filter", FinishReason.RECITATION.name: "content_filter",
-                          FinishReason.OTHER.name: "stop",
+                          FinishReason.OTHER.name: "stop", # Map OTHER to stop
+                          # MALFORMED_FUNCTION_CALL is handled above
                       }
                       final_openai_finish_reason = finish_reason_map.get(vertex_finish_reason_enum.name, "stop")
                       logger.info(f"[{request_id}] Mapping final Vertex finish_reason {vertex_finish_reason_enum.name} -> {final_openai_finish_reason}")
 
+                 # Construct the final chunk
                  final_litellm_chunk = {
                      "id": f"chatcmpl-adap-{request_id}", "object": "chat.completion.chunk", "created": int(time.time()),
                      "model": model_id_for_chunk,
-                     "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": final_openai_finish_reason, "logprobs": None}],
-                     "usage": usage_metadata
+                     "choices": [{"index": 0,
+                                 # Delta can be empty here, role is optional in final chunk if no content
+                                 "delta": {}, # Or {"role": "assistant"} - doesn't strictly matter for OpenAI final chunk
+                                 "finish_reason": final_openai_finish_reason,
+                                 "logprobs": None}],
+                     "usage": usage_metadata # Include usage if available
                  }
                  logger.debug(f"[{request_id}] Yielding final adapted LiteLLM chunk with finish_reason: {final_litellm_chunk}")
                  yield final_litellm_chunk
-                 break # Stop iteration
+                 break # Stop iteration after the final chunk
 
     except Exception as e:
-        # (Error handling remains the same)
         logger.error(f"[{request_id}] Error during Vertex stream adaptation: {e}", exc_info=True)
+        # Yield an error chunk in OpenAI format
         yield {
              "id": f"chatcmpl-adap-{request_id}", "object": "chat.completion.chunk", "created": int(time.time()),
-             "model": model_id_for_chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
-             "usage": None, "_error": f"Error adapting Vertex stream: {e}"
+             "model": model_id_for_chunk,
+             "choices": [{"index": 0,
+                         "delta": {"role": "assistant", "content": f"[Proxy Error adapting stream: {e}]"},
+                         "finish_reason": "stop"}], # Use 'stop' as finish reason for errors in stream
+             "usage": None,
+             "_error": f"Error adapting Vertex stream: {e}"
         }
     finally:
-        # (Finally block remains the same)
         logger.info(f"[{request_id}] Vertex AI stream adaptation finished.")
 
+def clean_gemini_schema(schema: Any) -> Any:
+    """ Recursively removes fields unsupported by Gemini from a JSON schema dict. """
+    if isinstance(schema, dict):
+        # Remove fields known to cause issues with Gemini's schema validation
+        schema.pop("additionalProperties", None)
+        schema.pop("default", None)
+        # Gemini might not support all string formats, remove if not explicitly supported
+        if schema.get("type") == "string" and "format" in schema:
+            # Keep only formats known to be generally safe or potentially useful
+            # Removed 'enum' as it's not a standard format, handled by 'enum' keyword directly
+            if schema["format"] not in {"date-time", "uri"}: # Keep uri? Check Gemini docs. Let's keep for now.
+                logger.debug(f"Removing potentially unsupported string format '{schema['format']}'")
+                schema.pop("format")
+        # Recurse into nested structures
+        for key, value in list(schema.items()): # Use list() for safe iteration while potentially popping
+            if key in ["properties", "items"] or isinstance(value, (dict, list)):
+                 schema[key] = clean_gemini_schema(value)
+            # Remove null values as they can sometimes cause issues
+            elif value is None:
+                # Check if the key is 'required' list, nulls are invalid there anyway
+                if key == 'required' and isinstance(schema[key], list):
+                     schema[key] = [item for item in schema[key] if item is not None]
+                     if not schema[key]: # Remove empty required list
+                          schema.pop(key)
+                elif key != 'required': # Don't remove required itself if it becomes null, but remove other nulls
+                     logger.debug(f"Removing null value for key '{key}'")
+                     schema.pop(key)
+
+    elif isinstance(schema, list):
+        # Also clean items within lists (e.g., in 'required' list or 'enum' list)
+        return [clean_gemini_schema(item) for item in schema if item is not None] # Remove None items from lists too
+    return schema
 
 # +++ NEW: Conversion from Vertex AI non-streaming response to LiteLLM/OpenAI dict +++
 def convert_vertex_response_to_litellm(
@@ -1332,9 +1435,6 @@ def convert_vertex_response_to_litellm(
     logger.debug(f"[{request_id}] Converted non-streaming Vertex response to LiteLLM/OpenAI format: {litellm_response}")
     return litellm_response
 
-
-# --- API Endpoints ---
-
 @app.post("/v1/messages", response_model=None) # response_model=None for StreamingResponse
 async def create_message(request_data: MessagesRequest, raw_request: Request):
     """ Handles Anthropic /v1/messages endpoint using Native Vertex AI SDK with Custom Auth. """
@@ -1343,30 +1443,25 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
 
     try:
         # --- Request Parsing and Model Mapping ---
-        # Extract original model name BEFORE validation potentially modifies request_data.model
         try:
             raw_body = await raw_request.body()
             original_model_name = json.loads(raw_body.decode()).get("model", "unknown-request-body")
         except Exception:
-            # Fallback if raw body parsing fails (shouldn't happen with Pydantic validation)
             original_model_name = request_data.original_model_name or "unknown-fallback"
             logger.warning(f"[{request_id}] Failed to parse raw request body for original model name. Using fallback: {original_model_name}")
 
-        # Store original name, request_data.model now holds the *mapped* Gemini ID
         request_data.original_model_name = original_model_name
-        actual_gemini_model_id = request_data.model # Contains mapped ID like "gemini-1.5-pro-latest"
+        actual_gemini_model_id = request_data.model
 
         logger.info(f"[{request_id}] Processing '/v1/messages': Original='{original_model_name}', Target SDK Model='{actual_gemini_model_id}', Stream={request_data.stream}")
 
         # --- Custom Authentication ---
         project_id, location, temp_creds = None, None, None
         try:
-            # Run synchronous auth function in a thread pool
             project_id, location, temp_creds = await asyncio.to_thread(get_gemini_credentials)
             logger.info(f"[{request_id}] Custom authentication successful. Project: {project_id}, Location: {location}")
         except AuthenticationError as e:
             logger.error(f"[{request_id}] Custom Authentication Failed: {e}")
-            # Use 503 Service Unavailable, as it's an issue connecting to a dependency (auth service)
             raise HTTPException(status_code=503, detail=f"Authentication Service Error: {e}")
         except Exception as e:
             logger.error(f"[{request_id}] Unexpected error during authentication thread: {e}", exc_info=True)
@@ -1374,12 +1469,10 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
 
         # --- Initialize Vertex AI SDK (Per-Request) ---
         try:
-            # vertexai.init() is generally lightweight setup, but run in thread just in case
             await asyncio.to_thread(vertexai.init, project=project_id, location=location, credentials=temp_creds)
             logger.info(f"[{request_id}] Vertex AI SDK initialized successfully for this request.")
         except google.auth.exceptions.GoogleAuthError as e:
              logger.error(f"[{request_id}] Vertex AI SDK Initialization Failed (Auth Error): {e}", exc_info=True)
-             # This likely means the token from custom auth was invalid/expired
              raise HTTPException(status_code=401, detail=f"Vertex SDK Auth Init Error (Invalid Credentials?): {e}")
         except Exception as e:
             logger.error(f"[{request_id}] Vertex AI SDK Initialization Failed (Unexpected): {e}", exc_info=True)
@@ -1390,61 +1483,57 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
         litellm_request_dict = convert_anthropic_to_litellm(request_data)
         litellm_messages = litellm_request_dict.get("messages", [])
         litellm_tools = litellm_request_dict.get("tools") # Tools in OpenAI format
-        system_prompt_text = litellm_request_dict.get("system_prompt") # Extracted system prompt
+        system_prompt_text = litellm_request_dict.get("system_prompt")
 
         # --- Convert Intermediate Format -> Vertex AI SDK Format ---
         vertex_history = convert_litellm_messages_to_vertex_content(litellm_messages)
-        vertex_tools = convert_litellm_tools_to_vertex_tools(litellm_tools)
+        vertex_tools = convert_litellm_tools_to_vertex_tools(litellm_tools) # Will be None if no tools
         vertex_system_instruction = Part.from_text(system_prompt_text) if system_prompt_text else None
 
         # --- Prepare Generation Config for Vertex AI ---
+        # *** MODIFICATION START ***
+        effective_temperature = request_data.temperature
+        if vertex_tools is not None and effective_temperature is not None and effective_temperature > 0.5:
+            # If tools are present and requested temperature is high, override to a lower value
+            # You can adjust the threshold (0.5) and the override value (0.2)
+            original_temp = effective_temperature
+            effective_temperature = 0.2
+            logger.warning(f"[{request_id}] Tools are present. Overriding requested temperature {original_temp} to {effective_temperature} for potentially better tool call generation.")
+        elif vertex_tools is not None and effective_temperature is None:
+             # If tools are present but no temperature was specified, default to a low value
+             effective_temperature = 0.2
+             logger.info(f"[{request_id}] Tools are present. Defaulting temperature to {effective_temperature} for potentially better tool call generation.")
+
         generation_config = GenerationConfig(
             max_output_tokens=request_data.max_tokens,
-            temperature=request_data.temperature,
+            temperature=effective_temperature, # Use the potentially adjusted temperature
             top_p=request_data.top_p,
             top_k=request_data.top_k,
             stop_sequences=request_data.stop_sequences if request_data.stop_sequences else None,
-            # candidate_count=1 # Default is 1
         )
-        logger.debug(f"[{request_id}] Vertex GenerationConfig: {generation_config}")
+        # *** MODIFICATION END ***
+        logger.debug(f"[{request_id}] Vertex GenerationConfig: {generation_config}") # Log the config being used
 
-        # --- Safety settings (Using Vertex defaults for now) ---
+        # --- Safety settings (Keep as is) ---
         safety_settings = None
-        # Example: Block Thresholds (adjust as needed)
-        # safety_settings = {
-        #     HarmCategory.HARM_CATEGORY_HARASSMENT: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        #     HarmCategory.HARM_CATEGORY_HATE_SPEECH: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        #     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        #     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        # }
 
-        # --- Tool Config (Handling Tool Choice - Basic Mapping) ---
-        # Vertex AI ToolConfig is different from OpenAI tool_choice.
-        # We can map 'none' and 'auto'. Forcing a specific tool is more complex.
+        # --- Tool Config (Keep as is) ---
         vertex_tool_config = None
         intermediate_tool_choice = litellm_request_dict.get("tool_choice")
         if intermediate_tool_choice == "none":
-             # TODO: Check how to explicitly disable tools in Vertex SDK if needed.
-             # For now, we just don't pass tools if choice is none? Or pass empty tool_config?
-             # Let's try omitting tools list if choice is none.
              if vertex_tools:
                   logger.warning(f"[{request_id}] Tool choice is 'none', but tools were provided. Ignoring tools.")
-                  vertex_tools = None # Effectively disable tools
+                  vertex_tools = None
         elif intermediate_tool_choice == "auto":
-             # This is the default behavior if tools are provided. No specific config needed.
              pass
         elif isinstance(intermediate_tool_choice, dict) and intermediate_tool_choice.get("type") == "function":
-             # Forcing a specific function call - Vertex SDK might require different structure.
-             # For now, log a warning and proceed with 'auto' behavior.
              forced_tool_name = intermediate_tool_choice.get("function", {}).get("name")
              logger.warning(f"[{request_id}] Forcing specific tool '{forced_tool_name}' not fully implemented for Vertex SDK. Proceeding with auto tool choice.")
-             # vertex_tool_config = ToolConfig(...) # Add specific Vertex config if available/needed
 
         # Log request details before calling API
         num_vertex_content = len(vertex_history) if vertex_history else 0
         num_vertex_tools = len(vertex_tools) if vertex_tools else 0
-        # Log with mapped model ID for clarity on what's being called
-        log_request_beautifully(raw_request.method, raw_request.url.path, original_model_name, actual_gemini_model_id, num_vertex_content, num_vertex_tools, 200) # Log success assumption
+        log_request_beautifully(raw_request.method, raw_request.url.path, original_model_name, actual_gemini_model_id, num_vertex_content, num_vertex_tools, 200)
 
 
         # --- Instantiate Vertex AI Model ---
@@ -1456,16 +1545,17 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
         # --- Call Native Vertex AI SDK ---
         if request_data.stream:
             # --- Streaming Call ---
-            logger.info(f"[{request_id}] Calling Vertex AI generate_content_async (streaming)")
+            logger.info(f"[{request_id}] Calling Vertex AI generate_content_async (streaming) with effective_temperature={effective_temperature}") # Log temp used
             try:
                 vertex_stream_generator = await model.generate_content_async(
                     contents=vertex_history,
-                    generation_config=generation_config,
+                    generation_config=generation_config, # Pass the potentially modified config
                     safety_settings=safety_settings,
                     tools=vertex_tools,
-                    # tool_config=vertex_tool_config, # Add if implemented
+                    # tool_config=vertex_tool_config,
                     stream=True,
                 )
+            # ... (rest of streaming try/except block remains the same) ...
             except google.api_core.exceptions.InvalidArgument as e:
                  logger.error(f"[{request_id}] Vertex API Invalid Argument Error (Check Request Structure/Schema): {e}", exc_info=True)
                  raise HTTPException(status_code=400, detail=f"Upstream API Invalid Argument: {e.message or str(e)}")
@@ -1474,52 +1564,74 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                  http_status = getattr(e, 'code', 502) # Default to 502 Bad Gateway
                  raise HTTPException(status_code=http_status, detail=f"Upstream API Error (Streaming): {e.message or str(e)}")
 
-            # Adapt the Vertex stream to LiteLLM/OpenAI stream format
             adapted_stream = adapt_vertex_stream_to_litellm(vertex_stream_generator, request_id, actual_gemini_model_id)
-
-            # Use the existing handle_streaming function with the adapted stream
             headers = {
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Mapped-Model": actual_gemini_model_id, # Header shows the actual model used
-                "X-Request-ID": request_id # Pass request ID back
+                "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive",
+                "X-Mapped-Model": actual_gemini_model_id, "X-Request-ID": request_id
             }
-            # Pass request_data (with original_model_name) and request_id to handle_streaming
             return StreamingResponse(
                  handle_streaming(adapted_stream, request_data, request_id),
-                 media_type="text/event-stream",
-                 headers=headers
+                 media_type="text/event-stream", headers=headers
             )
 
         else:
             # --- Non-Streaming Call ---
-            logger.info(f"[{request_id}] Calling Vertex AI generate_content_async (non-streaming)")
-            try:
-                vertex_response = await model.generate_content_async(
-                    contents=vertex_history,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings,
-                    tools=vertex_tools,
-                    # tool_config=vertex_tool_config,
-                    stream=False,
-                )
-                logger.debug(f"[{request_id}] Raw Vertex AI Non-Streaming Response: {vertex_response}")
+            # Applying the same temperature logic for consistency, though less critical for non-streaming
+            logger.info(f"[{request_id}] Calling Vertex AI generate_content_async (non-streaming) with effective_temperature={effective_temperature}") # Log temp used
+            # *** Using the retry logic proposed in the previous response for non-streaming ***
+            max_retries = 1
+            retries = 0
+            vertex_response = None
+            last_error = None
 
-            except google.api_core.exceptions.InvalidArgument as e:
-                 logger.error(f"[{request_id}] Vertex API Invalid Argument Error (Check Request Structure/Schema): {e}", exc_info=True)
-                 raise HTTPException(status_code=400, detail=f"Upstream API Invalid Argument: {e.message or str(e)}")
-            except google.api_core.exceptions.GoogleAPICallError as e:
-                 logger.error(f"[{request_id}] Vertex API Call Error (Non-Streaming): {e}", exc_info=True)
-                 http_status = getattr(e, 'code', 502) # Default to 502 Bad Gateway
-                 raise HTTPException(status_code=http_status, detail=f"Upstream API Error (Non-Streaming): {e.message or str(e)}")
+            while retries <= max_retries:
+                logger.info(f"[{request_id}] Non-streaming attempt {retries + 1}/{max_retries + 1}")
+                try:
+                    vertex_response = await model.generate_content_async(
+                        contents=vertex_history,
+                        generation_config=generation_config, # Pass the potentially modified config
+                        safety_settings=safety_settings,
+                        tools=vertex_tools,
+                        # tool_config=vertex_tool_config,
+                        stream=False,
+                    )
+                    logger.debug(f"[{request_id}] Raw Vertex AI Non-Streaming Response (Attempt {retries + 1}): {vertex_response}")
 
+                    is_malformed = False
+                    if vertex_response.candidates:
+                        candidate = vertex_response.candidates[0]
+                        if candidate.finish_reason == FinishReason.MALFORMED_FUNCTION_CALL:
+                            is_malformed = True
+                            last_error = f"Malformed function call detected by upstream API. Message: {getattr(candidate, 'finish_message', 'N/A')}"
+                            logger.warning(f"[{request_id}] {last_error} (Attempt {retries + 1})")
+
+                    if is_malformed and retries < max_retries:
+                        retries += 1
+                        logger.info(f"[{request_id}] Retrying non-streaming call due to malformed function call...")
+                        await asyncio.sleep(1)
+                        continue
+                    else:
+                        break # Exit loop on success, non-retryable error, or max retries reached
+
+                except google.api_core.exceptions.InvalidArgument as e:
+                    last_error = e; logger.error(f"[{request_id}] Vertex API Invalid Argument Error (Non-Streaming Attempt {retries + 1}): {e}", exc_info=True); break
+                except google.api_core.exceptions.GoogleAPICallError as e:
+                    last_error = e; logger.error(f"[{request_id}] Vertex API Call Error (Non-Streaming Attempt {retries + 1}): {e}", exc_info=True); break
+                except Exception as e:
+                     last_error = e; logger.critical(f"[{request_id}] Unexpected error during non-streaming call attempt {retries + 1}: {e}", exc_info=True); break
+
+            if vertex_response is None or (vertex_response.candidates and vertex_response.candidates[0].finish_reason == FinishReason.MALFORMED_FUNCTION_CALL):
+                 error_detail = f"Upstream model failed after {retries} retries."
+                 if last_error: error_detail += f" Last error: {str(last_error)}"
+                 status_code = 502
+                 if isinstance(last_error, google.api_core.exceptions.InvalidArgument): status_code = 400
+                 elif isinstance(last_error, google.api_core.exceptions.GoogleAPICallError): status_code = getattr(last_error, 'code', 502)
+                 raise HTTPException(status_code=status_code, detail=error_detail)
 
             # --- Convert Vertex AI Response -> Intermediate LiteLLM/OpenAI Format ---
             litellm_like_response = convert_vertex_response_to_litellm(vertex_response, actual_gemini_model_id, request_id)
-
             # --- Convert Intermediate Format -> Final Anthropic Format ---
-            anthropic_response = convert_litellm_to_anthropic(litellm_like_response, original_model_name) # Use original name here
+            anthropic_response = convert_litellm_to_anthropic(litellm_like_response, original_model_name)
 
             if not anthropic_response:
                  logger.error(f"[{request_id}] Failed to convert final response to Anthropic format.")
@@ -1534,17 +1646,14 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
 
     # --- General Exception Handling ---
     except HTTPException as e:
-        # Log and re-raise FastAPI HTTP exceptions, potentially adding request_id
         logger.error(f"[{request_id}] HTTPException during '/v1/messages': Status={e.status_code}, Detail={e.detail}", exc_info=(e.status_code >= 500))
-        # Modify detail to include request ID?
-        # e.detail = f"[{request_id}] {e.detail}" # Be careful modifying exception details
         raise e
     except Exception as e:
-        # Catch-all for unexpected errors
         logger.critical(f"[{request_id}] Unhandled Exception during '/v1/messages': {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: [{request_id}] {str(e)}")
 
 
+# ... (Keep Token Counting endpoint, Root endpoint, Middleware, Exception Handlers, and Server Startup) ...
 # --- Token Counting Endpoint (Using Native SDK) ---
 @app.post("/v1/messages/count_tokens", response_model=TokenCountResponse)
 async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
