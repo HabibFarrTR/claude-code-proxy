@@ -12,15 +12,17 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - `src/utils.py`: Utility functions for model mapping and formatting
 - `src/streaming.py`: Handler for streaming responses
 - `src/authenticator.py`: Handles authentication with Thomson Reuters AI Platform
+- `src/converters.py`: Format conversion between Anthropic and Vertex AI
 - `tests/test_server.py`: Tests for AI Platform integration
 
 ## Module Structure
-- `server.py`: API endpoints and request handling
+- `server.py`: API endpoints and FastAPI setup
 - `models.py`: All Pydantic models for request/response validation
-- `api.py`: AI PlatformClient for direct Vertex AI integration
-- `utils.py`: Helper functions for model mapping, request processing
-- `streaming.py`: Streaming response handler with Anthropic compatibility
+- `api.py`: AIplatformClient for direct Vertex AI integration and format conversion
+- `utils.py`: Helper functions for model mapping, request processing, and logging
+- `streaming.py`: Streaming response handler with Anthropic SSE compatibility
 - `authenticator.py`: Thomson Reuters AI Platform authentication
+- `converters.py`: Format conversion utilities for Anthropic/Vertex compatibility
 
 ## Build/Test Commands
 - Install dependencies: `poetry install`

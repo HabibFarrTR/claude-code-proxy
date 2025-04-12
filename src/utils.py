@@ -1,11 +1,7 @@
-import json
 import logging
-import os
 import sys
-import uuid
-from typing import Dict, List, Optional, Any, Literal
+from pathlib import Path
 
-logger = logging.getLogger("AnthropicGeminiProxy")
 
 # Define ANSI color codes for terminal output
 class Colors:
@@ -20,42 +16,75 @@ class Colors:
     UNDERLINE = "\033[4m"
     DIM = "\033[2m"
 
-# Get specific Gemini model names from environment or use defaults
-GEMINI_BIG_MODEL = os.environ.get("BIG_MODEL", "gemini-1.5-pro-latest")
-GEMINI_SMALL_MODEL = os.environ.get("SMALL_MODEL", "gemini-1.5-flash-latest")
 
-# --- Helper Functions ---
-def map_model_name(anthropic_model_name: str) -> str:
-    """Maps Anthropic model names to specific Gemini models. Returns the Gemini model ID."""
-    original_model = anthropic_model_name
-    mapped_gemini_model = GEMINI_BIG_MODEL  # Default
+class LoggerService:
+    """Centralized logging service for the application"""
 
-    logger.debug(
-        f"Attempting to map model: '{original_model}' -> Target Gemini BIG='{GEMINI_BIG_MODEL}', SMALL='{GEMINI_SMALL_MODEL}'"
-    )
+    _instance = None
+    _initialized = False
 
-    clean_name = anthropic_model_name.lower().split("@")[0]
-    if clean_name.startswith("anthropic/"):
-        clean_name = clean_name[10:]
-    elif clean_name.startswith("gemini/"):
-        clean_name = clean_name[7:]  # Allow direct gemini model names like 'gemini/gemini-1.5-pro-latest'
+    @classmethod
+    def get_instance(cls) -> "LoggerService":
+        """Get or create the singleton logger instance"""
+        if cls._instance is None:
+            cls._instance = LoggerService()
+        return cls._instance
 
-    if "haiku" in clean_name:
-        mapped_gemini_model = GEMINI_SMALL_MODEL
-        logger.info(f"Mapping '{original_model}' (Haiku) -> Target Gemini SMALL '{mapped_gemini_model}'")
-    elif "sonnet" in clean_name or "opus" in clean_name:
-        mapped_gemini_model = GEMINI_BIG_MODEL
-        logger.info(f"Mapping '{original_model}' (Sonnet/Opus) -> Target Gemini BIG '{mapped_gemini_model}'")
-    elif clean_name == GEMINI_BIG_MODEL.lower() or clean_name == GEMINI_SMALL_MODEL.lower():
-        mapped_gemini_model = clean_name  # Use the directly specified Gemini model
-        logger.info(f"Using directly specified target Gemini model: '{mapped_gemini_model}'")
-    else:
-        logger.warning(
-            f"Unrecognized Anthropic model name '{original_model}'. Defaulting to BIG model '{mapped_gemini_model}'."
+    def __init__(self):
+        """Initialize the logger - only runs once due to singleton pattern"""
+        if LoggerService._initialized:
+            return
+
+        # Create logs directory if it doesn't exist
+        logs_dir = Path(__file__).parent.parent.parent.parent / "logs"
+        logs_dir.mkdir(exist_ok=True)
+
+        # Configure root logger
+        self.logger = logging.getLogger("neuro_symbolic")
+        self.logger.setLevel(logging.DEBUG)
+
+        # Clear any existing handlers (important for streamlit hot-reloading)
+        if self.logger.handlers:
+            self.logger.handlers.clear()
+
+        # Create file handler for all logs
+        file_handler = logging.FileHandler(logs_dir / "application.log")
+        file_handler.setLevel(logging.DEBUG)
+
+        # Create console handler with higher level
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+
+        # Create formatters and add to handlers
+        file_formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
         )
+        console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-    # Return just the Gemini model ID (e.g., "gemini-1.5-pro-latest") for the SDK
-    return mapped_gemini_model
+        file_handler.setFormatter(file_formatter)
+        console_handler.setFormatter(console_formatter)
+
+        # Add handlers to logger
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+
+        # Mark as initialized
+        LoggerService._initialized = True
+
+        self.logger.info("Logger initialized")
+
+    def get_logger(self) -> logging.Logger:
+        """Get the configured logger"""
+        return self.logger
+
+
+# Create a module-level function to get the logger
+def get_logger() -> logging.Logger:
+    """Get the application logger"""
+    return LoggerService.get_instance().get_logger()
+
+
+logger = get_logger()
 
 
 def log_request_beautifully(method, path, original_model, mapped_model, num_messages, num_tools, status_code):
@@ -77,7 +106,7 @@ def log_request_beautifully(method, path, original_model, mapped_model, num_mess
         status_symbol = "✓" if 200 <= status_code < 300 else "✗"
         status_str = f"{status_color}{status_symbol} {status_code}{Colors.RESET}"
         log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
-        model_line = f"  {original_display} -> {mapped_display} ({messages_str}, {tools_str})"
+        model_line = f"  {original_display} → {mapped_display} ({messages_str}, {tools_str})"
         print(log_line)
         print(model_line)
         sys.stdout.flush()
@@ -87,10 +116,3 @@ def log_request_beautifully(method, path, original_model, mapped_model, num_mess
         print(
             f"{method} {path} {status_code} | {original_model} -> {mapped_model} | {num_messages} msgs, {num_tools} tools"
         )
-
-# Function to clean schema for Gemini compatibility
-def clean_gemini_schema(schema: Dict) -> Dict:
-    """Clean JSON schema for Gemini compatibility"""
-    # Implement schema cleaning logic here
-    # This is a placeholder - the actual implementation would need to be extracted from server.py
-    return schema

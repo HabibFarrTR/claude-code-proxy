@@ -1,16 +1,22 @@
 import json
-import logging
 import os
+
 import requests
-from typing import Tuple
 from google.oauth2.credentials import Credentials as OAuth2Credentials
 
-logger = logging.getLogger("AnthropicGeminiProxy")
+from src.config import GEMINI_BIG_MODEL
+from src.utils import get_logger
+
+logger = get_logger()
+
 
 class AuthenticationError(Exception):
     """Custom exception for authentication failures."""
+
     pass
 
+
+# --- Custom Authentication ---
 def get_gemini_credentials():
     """
     Authenticates with the custom endpoint and returns Vertex AI credentials.
@@ -18,7 +24,7 @@ def get_gemini_credentials():
     Raises: AuthenticationError
     """
     workspace_id = os.getenv("WORKSPACE_ID")
-    model_name_for_auth = os.getenv("MODEL_NAME", os.getenv("BIG_MODEL", "gemini-1.5-pro-latest"))  # Use configured BIG model for auth by default
+    model_name_for_auth = os.getenv("MODEL_NAME", GEMINI_BIG_MODEL)  # Use configured BIG model for auth by default
     auth_url = os.getenv("AUTH_URL")
 
     if not all([workspace_id, auth_url]):

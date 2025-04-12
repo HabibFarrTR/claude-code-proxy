@@ -137,6 +137,20 @@ This specialized proxy works by:
 
 The proxy handles both streaming and non-streaming responses, maintaining compatibility with all Claude clients. 🌊
 
+### Architecture 🏗️
+
+The proxy uses a modular architecture for maintainability and extensibility:
+
+| Module | Purpose |
+|--------|---------|
+| `server.py` | FastAPI endpoints and routing |
+| `models.py` | Pydantic data models for validation |
+| `api.py` | AIplatform client and request handling |
+| `utils.py` | Helper functions and utilities |
+| `converters.py` | Format conversion between APIs |
+| `streaming.py` | Streaming response handling |
+| `authenticator.py` | Thomson Reuters authentication |
+
 ## Testing 🧪
 
 The project includes tests for both streaming and non-streaming functionality, specifically for the AIplatform provider.
@@ -197,3 +211,25 @@ The shell profile:
 - Provides convenient aliases for using Claude with different backends
 - Allows starting/stopping the proxy server
 - Can be integrated into your shell startup files (.bashrc/.zshrc)
+
+## Known Limitations 🚫
+
+While this proxy enables using Claude Code with Thomson Reuters AIplatform's Gemini models, there are some inherent limitations:
+
+### Tool Usage Limitations
+
+1. **Batch Tool Operations**: Gemini models cannot process multiple tool calls simultaneously in the same way Claude does. The BatchTool feature of Claude Code will result in "MALFORMED_FUNCTION_CALL" errors.
+
+2. **Function Call Format**: The underlying API formats for function/tool calling differ between Claude and Gemini. Complex tool use patterns that work with Claude may not translate properly to Gemini.
+
+3. **Error Handling**: When function calls fail due to format differences, the proxy returns a generic "[Proxy Error: The model generated an invalid tool call and could not complete the request. Please try rephrasing.]" message.
+
+### Model Behavior Differences
+
+1. **Tool Output Processing**: Gemini and Claude may process and reason about tool outputs differently, affecting follow-up actions in agentic workflows.
+
+2. **State Management**: Different approaches to maintaining chat state between models can affect multi-turn tool usage.
+
+3. **Complex Workflows**: Advanced agentic workflows with multiple tool calls or batch operations will have degraded reliability compared to native Claude.
+
+Despite state-of-the-art capabilities, Gemini models are not drop-in replacements for Claude in complex agentic workflows. Simple tool use scenarios work well, but more complex interactions may require adjustments to your workflow.
