@@ -7,10 +7,10 @@ import uuid
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from src.api import aiplatform_client
-from src.models import MessagesRequest, TokenCountRequest, TokenCountResponse
+from src.models import MessagesRequest, MessagesResponse, TokenCountRequest, TokenCountResponse, Usage
 from src.streaming import handle_streaming
 from src.utils import log_request_beautifully, parse_tool_result_content
 
@@ -41,12 +41,21 @@ async def log_requests(request: Request, call_next):
     # Get request details
     method = request.method
     path = request.url.path
+    client = request.client.host if request.client else "unknown"
+    headers = {k: v for k, v in request.headers.items()}
 
-    # Log only basic request details at debug level
-    logger.debug(f"Request: {method} {path}")
+    # Log request details
+    logger.info(f"Incoming request: {method} {path} from {client}")
+    logger.debug(f"Request headers: {headers}")
 
     # Process the request and get the response
+    start_time = time.time()
     response = await call_next(request)
+    duration = time.time() - start_time
+
+    # Log response details
+    logger.info(f"Response: {response.status_code} in {duration:.2f}s")
+    logger.debug(f"Response headers: {response.headers}")
 
     return response
 
@@ -62,6 +71,32 @@ async def create_message(request: MessagesRequest, raw_request: Request):
         body = await raw_request.body()
         body_json = json.loads(body.decode("utf-8"))
         original_model = body_json.get("model", "unknown")
+        
+        # IMPORTANT: Client protection - Claude Code sends multiple requests for different models
+        # We need to prioritize one model to avoid confusing the client
+        client_ip = raw_request.client.host if raw_request.client else "unknown"
+        
+        # Skip processing for haiku model streams from the same client to prevent conflicts
+        if "haiku" in original_model.lower() and body_json.get("stream", False):
+            logger.info(f"⏭️ SKIPPING STREAMING REQUEST FOR HAIKU MODEL: Client={client_ip}")
+            
+            # Return a simple empty response that satisfies the client without conflicting streams
+            return JSONResponse(
+                content={
+                    "id": f"msg_{uuid.uuid4()}",
+                    "model": original_model,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": ""}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 0,
+                    }
+                },
+                status_code=200
+            )
 
         # Get the display name for logging, just the model name without provider prefix
         display_model = original_model
@@ -76,7 +111,35 @@ async def create_message(request: MessagesRequest, raw_request: Request):
             # Get the model name portion after the last slash if it exists
             clean_model_name = clean_model.split("/")[-1]
 
-        logger.info(f"📊 PROCESSING REQUEST: Model={clean_model_name}, Stream={request.stream}")
+        # IMPORTANT: Client protection - only process requests for the primary model
+        # Claude client sends multiple requests but we only need to process the main one
+        client_ip = raw_request.client.host if raw_request.client else "unknown"
+        
+        # For Claude clients, only process the Sonnet model
+        # Skip processing for Haiku models from the same client
+        if "haiku" in display_model.lower() and request.stream:
+            # Instead of processing the haiku model, return an empty response
+            # This allows the client to focus on a single stream
+            logger.info(f"⏭️ SKIPPING STREAMING REQUEST FOR HAIKU MODEL: Client={client_ip}")
+            
+            # Create a MessagesResponse that satisfies the client but doesn't do real work
+            empty_response = MessagesResponse(
+                id=f"msg_{uuid.uuid4()}",
+                model=request.model,
+                role="assistant",
+                content=[{"type": "text", "text": ""}],
+                stop_reason="end_turn",
+                stop_sequence=None,
+                usage=Usage(
+                    input_tokens=1,
+                    output_tokens=0,
+                ),
+            )
+            
+            # Return a non-streaming response to avoid conflicts
+            return empty_response
+        
+        logger.info(f"📊 PROCESSING REQUEST: Model={clean_model_name}, Stream={request.stream}, Client={client_ip}")
 
         # Process system message if present
         system_message = None
@@ -142,18 +205,19 @@ async def create_message(request: MessagesRequest, raw_request: Request):
                 model_name=clean_model_name, messages=messages, system_message=system_message, stream=True
             )
 
-            # Convert to Anthropic streaming format
+            # Convert to Anthropic streaming format with EXACT matching headers
+            # Claude client expects these exact headers
             headers = {
                 "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",  # Important for Nginx to not buffer the response
-                "Transfer-Encoding": "chunked",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive"
             }
-            logger.info(f"Returning streaming response with headers: {headers}")
+            logger.info(f"Returning streaming response with Anthropic-compatible headers")
             # Make sure both Content-Type header and media_type are set to text/event-stream
             return StreamingResponse(
-                handle_streaming(response_generator, request), media_type="text/event-stream", headers=headers
+                handle_streaming(response_generator, request), 
+                media_type="text/event-stream",
+                headers=headers
             )
         else:
             # For non-streaming requests
