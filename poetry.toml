@@ -1,0 +1,6 @@
+[virtualenvs]
+in-project = true
+
+[repositories]
+[repositories.tr]
+url = "https://tr1.jfrog.io/tr1/api/pypi/pypi-local"

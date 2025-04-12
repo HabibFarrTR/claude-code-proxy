@@ -1,15 +1,49 @@
-[project]
-name = "anthropic-proxy"
+[tool.poetry]
+name = "claude-code-proxy"
 version = "0.1.0"
-description = "Proxy that translates between Anthropic API and LiteLLM"
+description = "Proxy that translates between Gemini and Claude models"
+authors = ["Habib Farr <habib.farr@thomsonreuters.com>"]
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "fastapi[standard]>=0.115.11",
-    "uvicorn>=0.34.0",
-    "httpx>=0.25.0",
-    "pydantic>=2.0.0",
-    "litellm>=1.40.14",
-    "python-dotenv>=1.0.0",
-]
 
+[[tool.poetry.packages]]
+include = "src"
+from = "."
+
+[tool.poetry.dependencies]
+python = "~3.11"
+fastapi = {extras = ["standard"], version = ">=0.115.11"}
+uvicorn = ">=0.34.0"
+httpx = ">=0.25.0"
+pydantic = ">=2.0.0"
+litellm = ">=1.40.14"
+python-dotenv = ">=1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "4.2.0"
+pytest = "^7.4.0"
+pytest-asyncio = "^0.21.1"
+mypy = "^1.15.0"
+trlabs-mltools-cli = "4.0.0"
+
+[tool.poetry.scripts]
+start = "uvicorn:run"
+
+[tool.pytest]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "tr"
+url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
+priority = "primary"
+
+[tool.trlabs_mltools_cli.project]
+workspace = "PracticalLawxOhJ"
+work_item = "2138300"
+experiments_dir = "experiments"
+scripts_dir = "scripts"
+applications_dir = "applications"
+usage_pulse_opt_out = true

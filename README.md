@@ -13,21 +13,20 @@ A proxy server that lets you use Anthropic clients with Gemini or OpenAI models 
 
 - OpenAI API key 🔑
 - Google AI Studio (Gemini) API key (if using default provider) 🔑
-- [uv](https://github.com/astral-sh/uv) installed.
+- [Poetry](https://python-poetry.org/) installed.
 
 ### Setup 🛠️
 
 1. **Clone this repository**:
    ```bash
-   git clone https://github.com/1rgs/claude-code-openai.git
-   cd claude-code-openai
+   git clone https://github.com/YOUR-COMPANY/claude-code-proxy.git
+   cd claude-code-proxy
    ```
 
-2. **Install uv** (if you haven't already):
+2. **Install dependencies with Poetry**:
    ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
+   poetry install
    ```
-   *(`uv` will handle dependencies based on `pyproject.toml` when you run the server)*
 
 3. **Configure Environment Variables**:
    Copy the example environment file:
@@ -49,9 +48,14 @@ A proxy server that lets you use Anthropic clients with Gemini or OpenAI models 
 
 4. **Run the server**:
    ```bash
-   uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
+   poetry run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
    ```
    *(`--reload` is optional, for development)*
+   
+   Alternatively, use the poetry script:
+   ```bash
+   poetry run start server:app --host 0.0.0.0 --port 8082 --reload
+   ```
 
 ### Using with Claude Code 🎮
 
@@ -128,14 +132,14 @@ SMALL_MODEL=gpt-4o-mini
 
 Or set them directly when running the server:
 ```bash
-# Using OpenAI models (with uv)
-BIG_MODEL=gpt-4o SMALL_MODEL=gpt-4o-mini uv run uvicorn server:app --host 0.0.0.0 --port 8082
+# Using OpenAI models
+BIG_MODEL=gpt-4o SMALL_MODEL=gpt-4o-mini poetry run uvicorn server:app --host 0.0.0.0 --port 8082
 
-# Using Gemini models (with uv)
-BIG_MODEL=gemini-2.5-pro-preview-03-25 SMALL_MODEL=gemini-2.0-flash uv run uvicorn server:app --host 0.0.0.0 --port 8082
+# Using Gemini models
+BIG_MODEL=gemini-2.5-pro-preview-03-25 SMALL_MODEL=gemini-2.0-flash poetry run uvicorn server:app --host 0.0.0.0 --port 8082
 
-# Mix and match (with uv)
-BIG_MODEL=gemini-2.5-pro-preview-03-25 SMALL_MODEL=gpt-4o-mini uv run uvicorn server:app --host 0.0.0.0 --port 8082
+# Mix and match
+BIG_MODEL=gemini-2.5-pro-preview-03-25 SMALL_MODEL=gpt-4o-mini poetry run uvicorn server:app --host 0.0.0.0 --port 8082
 ```
 
 ## How It Works 🧩
