@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "claude-code-proxy"
 version = "0.1.0"
-description = "Proxy that translates between Thomson Reuters AIplatform and Claude models"
+description = "Proxy that translates between Thomson Reuters AI Platform and Claude models"
 authors = ["Habib Farr <habib.farr@thomsonreuters.com>"]
 readme = "README.md"
 

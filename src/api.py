@@ -1,5 +1,5 @@
 """
-AIplatform API integration module.
+AI Platform API integration module.
 Handles direct interaction with Vertex AI.
 """
 
@@ -17,23 +17,23 @@ from src.authenticator import AuthenticationError, get_gemini_credentials
 logger = logging.getLogger(__name__)
 
 
-class AIplatformClient:
-    """Client for direct interaction with Thomson Reuters AIplatform."""
+class AIPlatformClient:
+    """Client for direct interaction with Thomson Reuters AI Platform."""
 
     def __init__(self):
-        """Initialize the AIplatform client."""
-        # AIplatform (Thomson Reuters) credentials
+        """Initialize the AI Platform client."""
+        # AI Platform (Thomson Reuters) credentials
         self.project_id = None
         self.location = None
         self.credentials = None
         self.initialized = False
 
     def initialize(self):
-        """Initialize AIplatform credentials."""
+        """Initialize AI Platform credentials."""
         try:
             self.project_id, self.location, self.credentials = get_gemini_credentials()
             logging.info(
-                f"Successfully initialized AIplatform credentials for project {self.project_id} in {self.location}"
+                f"Successfully initialized AI Platform credentials for project {self.project_id} in {self.location}"
             )
 
             # Initialize Vertex AI with our authenticated credentials
@@ -43,11 +43,11 @@ class AIplatformClient:
             self.initialized = True
             return True
         except AuthenticationError as e:
-            logging.error(f"Failed to initialize AIplatform credentials: {e}")
-            raise  # Fail immediately if we can't get credentials - AIplatform is our only provider
+            logging.error(f"Failed to initialize AI Platform credentials: {e}")
+            raise  # Fail immediately if we can't get credentials - AI Platform is our only provider
         except Exception as e:
-            logging.error(f"Unexpected error initializing AIplatform credentials: {e}")
-            raise  # Fail immediately if we can't get credentials - AIplatform is our only provider
+            logging.error(f"Unexpected error initializing AI Platform credentials: {e}")
+            raise  # Fail immediately if we can't get credentials - AI Platform is our only provider
 
     def ensure_initialized(self):
         """Ensure the client is initialized."""
@@ -62,16 +62,16 @@ class AIplatformClient:
         stream: bool = False,
     ) -> Dict[str, Any]:
         """
-        Send a completion request to AIplatform.
+        Send a completion request to AI Platform.
 
         Args:
-            model_name: The AIplatform model name without the prefix
+            model_name: The AI Platform model name without the prefix
             messages: List of message objects with role and content
             system_message: Optional system message to prepend
             stream: Whether to stream the response
 
         Returns:
-            The response from AIplatform in a format compatible with our processing
+            The response from AI Platform in a format compatible with our processing
         """
         self.ensure_initialized()
 
@@ -156,7 +156,7 @@ class AIplatformClient:
         Generate streaming responses in Anthropic-compatible format.
 
         Args:
-            model_name: The AIplatform model name
+            model_name: The AI Platform model name
             chat: The VertexAI chat session
             prompt: The prompt to send
 
@@ -318,4 +318,4 @@ class AIplatformClient:
 
 
 # Create a singleton instance
-aiplatform_client = AIplatformClient()
+aiplatform_client = AIPlatformClient()

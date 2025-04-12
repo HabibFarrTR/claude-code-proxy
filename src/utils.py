@@ -1,5 +1,5 @@
 """
-Utility functions for the AIplatform proxy.
+Utility functions for the AI Platform proxy.
 """
 
 import json
@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
-# List of supported AIplatform models
+# List of supported AI Platform models
 AIPLATFORM_MODELS = [
     "gemini-2.5-pro-preview-03-25",  # Main model for high-quality outputs
     "gemini-2.0-flash",  # Faster, smaller model for simpler queries
@@ -85,7 +85,7 @@ def parse_tool_result_content(content):
 
 
 def map_model_name(model_name: str, data: Dict[str, Any]) -> str:
-    """Map model names from Claude to AIplatform."""
+    """Map model names from Claude to AI Platform."""
     original_model = model_name
     new_model = model_name  # Default to original value
 
@@ -108,7 +108,7 @@ def map_model_name(model_name: str, data: Dict[str, Any]) -> str:
     # --- Mapping Logic ---
     mapped = False
 
-    # Map Claude models to corresponding AIplatform models
+    # Map Claude models to corresponding AI Platform models
     if "haiku" in clean_model.lower():
         # Map Claude Haiku to the small model
         new_model = f"aiplatform/{AIPLATFORM_MODELS[1]}"  # gemini-2.0-flash
@@ -123,7 +123,7 @@ def map_model_name(model_name: str, data: Dict[str, Any]) -> str:
         # Direct model reference, ensure it has aiplatform/ prefix
         new_model = f"aiplatform/{clean_model}"
         mapped = True
-        logger.info(f"Using directly specified model with AIplatform prefix: {new_model}")
+        logger.info(f"Using directly specified model with AI Platform prefix: {new_model}")
     else:
         # For any unrecognized model, default to the most capable one
         new_model = f"aiplatform/{AIPLATFORM_MODELS[0]}"  # Default to the most capable model
@@ -155,7 +155,7 @@ class Colors:
 
 
 def log_request_beautifully(method, path, claude_model, aiplatform_model, num_messages, num_tools, status_code):
-    """Log requests in a beautiful format showing Claude to AIplatform mapping."""
+    """Log requests in a beautiful format showing Claude to AI Platform mapping."""
     # Format the Claude model name nicely
     claude_display = f"{Colors.CYAN}{claude_model}{Colors.RESET}"
 
@@ -164,11 +164,11 @@ def log_request_beautifully(method, path, claude_model, aiplatform_model, num_me
     if "?" in endpoint:
         endpoint = endpoint.split("?")[0]
 
-    # Extract just the AIplatform model name without provider prefix
-    aiplatform_display = aiplatform_model
-    if "/" in aiplatform_display:
-        aiplatform_display = aiplatform_display.split("/")[-1]
-    aiplatform_display = f"{Colors.GREEN}{aiplatform_display}{Colors.RESET}"
+    # Extract just the AI Platform model name without provider prefix
+    display = aiplatform_model
+    if "/" in display:
+        display = display.split("/")[-1]
+    display = f"{Colors.GREEN}{display}{Colors.RESET}"
 
     # Format tools and messages
     tools_str = f"{Colors.MAGENTA}{num_tools} tools{Colors.RESET}"
@@ -183,7 +183,7 @@ def log_request_beautifully(method, path, claude_model, aiplatform_model, num_me
 
     # Put it all together in a clear, beautiful format
     log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
-    model_line = f"{claude_display} → {aiplatform_display} {tools_str} {messages_str}"
+    model_line = f"{claude_display} → {display} {tools_str} {messages_str}"
 
     # Print to console
     print(log_line)

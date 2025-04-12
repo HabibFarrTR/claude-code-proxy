@@ -1,8 +1,8 @@
 """
-Test suite for Thomson Reuters AIplatform Proxy.
+Test suite for Thomson Reuters AI Platform Proxy.
 
 This script provides tests for both streaming and non-streaming requests
-with Thomson Reuters' AIplatform service, including tool use and basic functionality.
+with Thomson Reuters' AI Platform service, including tool use and basic functionality.
 
 Usage:
   pytest -xvs tests/test_server.py                             # Run all tests
@@ -83,7 +83,7 @@ REQUIRED_EVENT_TYPES = {
 
 @pytest.fixture
 def aiplatform_model():
-    """Get the appropriate AIplatform model to test with."""
+    """Get the appropriate AI Platform model to test with."""
     return "gemini-2.5-pro-preview-03-25"  # This is what will be mapped to vertex_ai/
 
 
@@ -369,20 +369,20 @@ def validate_stream_stats(stats):
 
 @pytest.mark.asyncio
 async def test_aiplatform(aiplatform_model):
-    """Test AIplatform model functionality."""
+    """Test AI Platform model functionality."""
 
     # Check if the required environment variables are present
     required_vars = ["WORKSPACE_ID", "AUTH_URL"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
-        pytest.skip(f"Skipping AIplatform test: Missing required environment variables: {', '.join(missing_vars)}")
+        pytest.skip(f"Skipping AI Platform test: Missing required environment variables: {', '.join(missing_vars)}")
 
     # First, test the authenticator directly
     from src.authenticator import get_gemini_credentials
 
     try:
         # Test authenticator
-        print("\n--- Testing AIplatform Authenticator ---")
+        print("\n--- Testing AI Platform Authenticator ---")
         project_id, location, credentials = get_gemini_credentials()
 
         assert project_id is not None, "Project ID is None"
@@ -400,21 +400,18 @@ async def test_aiplatform(aiplatform_model):
         print(f"❌ Authentication failed: {e}")
         raise
 
-    # Continue with direct AIplatform integration testing
-    print("\n--- Testing Direct AIplatform Integration ---")
+    # Continue with direct AI Platform integration testing
+    print("\n--- Testing Direct AI Platform Integration ---")
     print("Using Thomson Reuters authentication token for direct Vertex AI access")
-
-    # Test the direct AIplatform integration (bypassing LiteLLM)
-    print("\n--- Testing Direct AIplatform Integration ---")
 
     # Store original value to restore later
     original_provider = os.environ.get("PREFERRED_PROVIDER", "google")
     os.environ["PREFERRED_PROVIDER"] = "aiplatform"
 
     try:
-        # Basic request with AIplatform model
+        # Basic request with AI Platform model
         data = {
-            "model": f"aiplatform/{aiplatform_model}",  # Explicit AIplatform prefix
+            "model": f"aiplatform/{aiplatform_model}",  # Explicit AI Platform prefix
             "max_tokens": 300,
             "messages": [{"role": "user", "content": "Hello, world! Can you tell me about Paris in 2-3 sentences?"}],
         }
@@ -427,10 +424,10 @@ async def test_aiplatform(aiplatform_model):
         # Validate response
         assert compare_responses(response)
 
-        print("✅ AIplatform direct integration test PASSED")
+        print("✅ AI Platform direct integration test PASSED")
         print("✅ Direct Vertex AI integration is working with Thomson Reuters tokens")
     except Exception as e:
-        print(f"❌ AIplatform direct integration test FAILED: {e}")
+        print(f"❌ AI Platform direct integration test FAILED: {e}")
         # If direct integration fails, try Gemini fallback as backup test
         print("\n--- Falling back to Gemini API test ---")
         os.environ["PREFERRED_PROVIDER"] = "google"
@@ -456,19 +453,19 @@ async def test_aiplatform(aiplatform_model):
 
 @pytest.mark.asyncio
 async def test_aiplatform_with_tools(aiplatform_model):
-    """Test AIplatform model with tools."""
+    """Test AI Platform model with tools."""
 
     # Check if the required environment variables are present
     required_vars = ["WORKSPACE_ID", "AUTH_URL"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
-        pytest.skip(f"Skipping AIplatform test: Missing required environment variables: {', '.join(missing_vars)}")
+        pytest.skip(f"Skipping AI Platform test: Missing required environment variables: {', '.join(missing_vars)}")
 
-    # Continue with direct AIplatform integration testing for tools
-    print("\n--- Testing Direct AIplatform Integration with Tools ---")
+    # Continue with direct AI Platform integration testing for tools
+    print("\n--- Testing Direct AI Platform Integration with Tools ---")
     print("Using Thomson Reuters authentication token for direct Vertex AI access with tools")
 
-    # Test direct AIplatform integration with tools
+    # Test direct AI Platform integration with tools
     # Store original value to restore later
     original_provider = os.environ.get("PREFERRED_PROVIDER", "google")
     os.environ["PREFERRED_PROVIDER"] = "aiplatform"
@@ -476,7 +473,7 @@ async def test_aiplatform_with_tools(aiplatform_model):
     try:
         # Request with calculator tool
         data = {
-            "model": f"aiplatform/{aiplatform_model}",  # Explicit AIplatform prefix
+            "model": f"aiplatform/{aiplatform_model}",  # Explicit AI Platform prefix
             "max_tokens": 300,
             "messages": [{"role": "user", "content": "What is 135 + 7.5 divided by 2.5?"}],
             "tools": [calculator_tool],
@@ -491,9 +488,9 @@ async def test_aiplatform_with_tools(aiplatform_model):
         # Validate response
         assert compare_responses(response, check_tools=True)
 
-        print("✅ AIplatform tools test PASSED (Direct integration)")
+        print("✅ AI Platform tools test PASSED (Direct integration)")
     except Exception as e:
-        print(f"❌ AIplatform tools test FAILED: {e}")
+        print(f"❌ AI Platform tools test FAILED: {e}")
         # Fall back to Gemini test if direct integration fails
         print("\n--- Falling back to Gemini with Tools test ---")
         os.environ["PREFERRED_PROVIDER"] = "google"
@@ -521,34 +518,34 @@ async def test_aiplatform_with_tools(aiplatform_model):
 
 @pytest.mark.asyncio
 async def test_aiplatform_streaming(aiplatform_model):
-    """Test AIplatform model with streaming."""
+    """Test AI Platform model with streaming."""
 
     # Check if the required environment variables are present
     required_vars = ["WORKSPACE_ID", "AUTH_URL"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
-        pytest.skip(f"Skipping AIplatform test: Missing required environment variables: {', '.join(missing_vars)}")
+        pytest.skip(f"Skipping AI Platform test: Missing required environment variables: {', '.join(missing_vars)}")
 
-    # Continue with direct AIplatform integration testing for streaming
-    print("\n--- Testing Direct AIplatform Integration with Streaming ---")
+    # Continue with direct AI Platform integration testing for streaming
+    print("\n--- Testing Direct AI Platform Integration with Streaming ---")
     print("Using Thomson Reuters authentication token for direct Vertex AI streaming")
 
-    # Test direct AIplatform integration with streaming
+    # Test direct AI Platform integration with streaming
     # Store original value to restore later
     original_provider = os.environ.get("PREFERRED_PROVIDER", "google")
     os.environ["PREFERRED_PROVIDER"] = "aiplatform"
 
     try:
-        # Streaming request with AIplatform model
+        # Streaming request with AI Platform model
         data = {
-            "model": f"aiplatform/{aiplatform_model}",  # Explicit AIplatform prefix
+            "model": f"aiplatform/{aiplatform_model}",  # Explicit AI Platform prefix
             "max_tokens": 100,
             "stream": True,
             "messages": [{"role": "user", "content": "Count from 1 to 5, with one number per line."}],
         }
 
         # Process the streaming response
-        stats, error = await stream_response(PROXY_API_URL, proxy_headers, data, "AIplatform Direct")
+        stats, error = await stream_response(PROXY_API_URL, proxy_headers, data, "AI Platform Direct")
 
         # Print statistics
         stats.summarize()
@@ -559,9 +556,9 @@ async def test_aiplatform_streaming(aiplatform_model):
         # Validate the stream stats
         assert validate_stream_stats(stats)
 
-        print("✅ AIplatform streaming test PASSED (Direct integration)")
+        print("✅ AI Platform streaming test PASSED (Direct integration)")
     except Exception as e:
-        print(f"❌ AIplatform streaming test FAILED: {e}")
+        print(f"❌ AI Platform streaming test FAILED: {e}")
         # Fall back to Gemini streaming test
         print("\n--- Falling back to Gemini Streaming test ---")
         os.environ["PREFERRED_PROVIDER"] = "google"

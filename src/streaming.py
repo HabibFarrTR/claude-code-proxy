@@ -142,7 +142,6 @@ async def handle_streaming(response_generator, original_request):
                     # Check for finish_reason to know when we're done
                     finish_reason = getattr(choice, "finish_reason", None)
 
-                    # Process text content (for standard LiteLLM responses)
                     delta_content = None
 
                     # Handle different formats of delta content

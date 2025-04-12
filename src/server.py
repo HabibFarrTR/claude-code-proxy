@@ -31,7 +31,7 @@ logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
 app = FastAPI()
 
-# Initialize AIplatform client
+# Initialize AI Platform client
 aiplatform_client.initialize()
 
 
@@ -136,8 +136,8 @@ async def create_message(request: MessagesRequest, raw_request: Request):
 
         # Handle streaming mode
         if request.stream:
-            logger.info("Using direct AIplatform integration for streaming")
-            # Get streaming response from AIplatform
+            logger.info("Using direct AI Platform integration for streaming")
+            # Get streaming response from AI Platform
             response_generator = await aiplatform_client.completion(
                 model_name=clean_model_name, messages=messages, system_message=system_message, stream=True
             )
@@ -146,10 +146,10 @@ async def create_message(request: MessagesRequest, raw_request: Request):
             return StreamingResponse(handle_streaming(response_generator, request), media_type="text/event-stream")
         else:
             # For non-streaming requests
-            logger.info("Using direct AIplatform integration for completion")
+            logger.info("Using direct AI Platform integration for completion")
             start_time = time.time()
 
-            # Get response from AIplatform
+            # Get response from AI Platform
             response = await aiplatform_client.completion(
                 model_name=clean_model_name, messages=messages, system_message=system_message, stream=False
             )
@@ -219,7 +219,7 @@ async def count_tokens(request: TokenCountRequest, raw_request: Request):
         if "/" in display_model:
             display_model = display_model.split("/")[-1]
 
-        # Clean model name for AIplatform
+        # Clean model name for AI Platform
         if request.model.startswith("aiplatform/"):
             clean_model_name = request.model.replace("aiplatform/", "")
         else:
@@ -280,7 +280,7 @@ async def count_tokens(request: TokenCountRequest, raw_request: Request):
 @app.get("/")
 async def root():
     """Root endpoint that describes the service."""
-    return {"message": "Anthropic API Compatible Proxy for Thomson Reuters AIplatform"}
+    return {"message": "Anthropic API Compatible Proxy for Thomson Reuters AI Platform"}
 
 
 if __name__ == "__main__":

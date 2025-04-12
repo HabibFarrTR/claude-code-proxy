@@ -24,7 +24,7 @@ usage() {
     echo "Examples:"
     echo "  $0                      # Run all tests"
     echo "  $0 -t test_anthropic    # Run only Anthropic tests"
-    echo "  $0 -t test_aiplatform   # Run only AIplatform tests"
+    echo "  $0 -t test_aiplatform   # Run only AI Platform tests"
     echo "  $0 --skip-auth          # Skip all authentication tests"
     exit 1
 }
@@ -86,10 +86,10 @@ if [ -n "$EXISTING_PID" ]; then
     sleep 1
 fi
 
-# Add a note about running mltools-cli aws-login if testing AIplatform
+# Add a note about running mltools-cli aws-login if testing AI Platform
 if [[ "$TEST_FILTER" == "::test_aiplatform" ]] && [[ "$SKIP_AUTH" == "false" ]]; then
     echo ""
-    echo "🔑 IMPORTANT: To test AIplatform, you need to run 'mltools-cli aws-login' first"
+    echo "🔑 IMPORTANT: To test AI Platform, you need to run 'mltools-cli aws-login' first"
     echo "   This is required to set up AWS credentials for Thomson Reuters authentication"
     echo ""
 
@@ -147,7 +147,7 @@ if [ "$SKIP_AUTH" == "true" ]; then
     if [ -n "$TEST_FILTER" ]; then
         # If a specific test was requested but we want to skip auth tests
         if [[ "$TEST_FILTER" == "::test_aiplatform" ]]; then
-            echo "You requested AIplatform tests but also --skip-auth. These options are incompatible."
+            echo "You requested AI Platform tests but also --skip-auth. These options are incompatible."
             exit 1
         fi
         # Run the specific test

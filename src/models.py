@@ -1,6 +1,6 @@
 """
-Pydantic models for the AIplatform proxy.
-These models are used to validate and convert between Anthropic and AIplatform formats.
+Pydantic models for the AI Platform proxy.
+These models are used to validate and convert between Anthropic and AI Platform formats.
 """
 
 from typing import Any, Dict, List, Literal, Optional, Union
