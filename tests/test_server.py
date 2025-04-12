@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Test suite for Thomson Reuters AIplatform Proxy.
 
@@ -6,10 +5,10 @@ This script provides tests for both streaming and non-streaming requests
 with Thomson Reuters' AIplatform service, including tool use and basic functionality.
 
 Usage:
-  pytest -xvs tests/test_server.py                  # Run all tests
-  pytest -xvs tests/test_server.py::test_aiplatform # Test basic functionality
+  pytest -xvs tests/test_server.py                             # Run all tests
+  pytest -xvs tests/test_server.py::test_aiplatform            # Test basic functionality
   pytest -xvs tests/test_server.py::test_aiplatform_with_tools # Test tool usage
-  pytest -xvs tests/test_server.py::test_aiplatform_streaming # Test streaming
+  pytest -xvs tests/test_server.py::test_aiplatform_streaming  # Test streaming
 """
 
 import json
