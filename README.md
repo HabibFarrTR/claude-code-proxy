@@ -2,8 +2,7 @@
 
 **Use Anthropic clients (like Claude Code) with Thomson Reuters AIplatform backend.** 🤝
 
-A specialized proxy server that lets you use Anthropic clients with Thomson Reuters AIplatform (Vertex AI) models directly. 🌉
-
+A specialized, modular proxy server that lets you use Anthropic clients with Thomson Reuters AIplatform (Vertex AI) models directly. 🌉
 
 ![Anthropic API Proxy](pic.png)
 
@@ -44,13 +43,13 @@ A specialized proxy server that lets you use Anthropic clients with Thomson Reut
 
 4. **Run the server**:
    ```bash
-   poetry run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
+   poetry run uvicorn src.server:app --host 0.0.0.0 --port 8082 --reload
    ```
    *(`--reload` is optional, for development)*
 
    Alternatively, use the poetry script:
    ```bash
-   poetry run start server:app --host 0.0.0.0 --port 8082 --reload
+   poetry run start src.server:app --host 0.0.0.0 --port 8082 --reload
    ```
 
 ### Using with Claude Code 🎮
@@ -101,7 +100,7 @@ This specialized proxy works by:
 1. **Receiving requests** in Anthropic's API format 📥
 2. **Authenticating** with Thomson Reuters AIplatform to get a Vertex AI token 🔑
 3. **Mapping** Claude model names to the appropriate AIplatform models 🔄
-4. **Directly calling** Vertex AI with the request (bypassing LiteLLM) 📤
+4. **Directly calling** Vertex AI with the request 📤
 5. **Converting** the response back to Anthropic format 🔄
 6. **Returning** the formatted response to the client ✅
 
@@ -146,13 +145,3 @@ IMPORTANT: Before running tests, make sure you've run `mltools-cli aws-login` fi
 2. Content blocks (text, tool use, tool results) are flattened to text
 3. Responses from Vertex AI are wrapped in Anthropic-compatible format
 4. For streaming, the proxy simulates Anthropic's server-sent event structure
-
-## Contributing 🤝
-
-Contributions are welcome! Please feel free to submit a Pull Request. 🎁
-
-When contributing code:
-1. Make sure all tests pass with the AIplatform provider
-2. Update documentation as needed
-3. Follow the existing code style
-4. Run `mltools-cli aws-login` before testing any changes
