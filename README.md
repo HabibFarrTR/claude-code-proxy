@@ -39,7 +39,7 @@ A specialized proxy server that lets you use Anthropic clients with Thomson Reut
    *   `WORKSPACE_ID`: Your Thomson Reuters AIplatform workspace ID (REQUIRED).
    *   `AUTH_URL`: Authentication URL for Thomson Reuters AIplatform (default: "https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token").
    *   `MODEL_NAME`: The model name to use with AIplatform (default: "gemini-2.5-pro-preview-03-25").
-   
+
    **IMPORTANT**: You must run `mltools-cli aws-login` before starting the server to set up AWS credentials.
 
 4. **Run the server**:
@@ -47,7 +47,7 @@ A specialized proxy server that lets you use Anthropic clients with Thomson Reut
    poetry run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
    ```
    *(`--reload` is optional, for development)*
-   
+
    Alternatively, use the poetry script:
    ```bash
    poetry run start server:app --host 0.0.0.0 --port 8082 --reload
@@ -86,12 +86,12 @@ The following AIplatform models are supported with automatic `aiplatform/` prefi
 
 ### Model Prefix Handling
 The proxy automatically adds the appropriate prefix to model names:
-- AIplatform models get the `aiplatform/` prefix 
+- AIplatform models get the `aiplatform/` prefix
 - Claude models (haiku, sonnet, opus) are mapped to the appropriate AIplatform model
 
 For example:
 - `claude-3-sonnet-20240229` becomes `aiplatform/gemini-2.5-pro-preview-03-25`
-- `claude-3-haiku-20240307` becomes `aiplatform/gemini-2.0-flash` 
+- `claude-3-haiku-20240307` becomes `aiplatform/gemini-2.0-flash`
 - Direct use: `aiplatform/gemini-2.5-pro-preview-03-25`
 
 ## How It Works 🧩
@@ -152,7 +152,7 @@ IMPORTANT: Before running tests, make sure you've run `mltools-cli aws-login` fi
 Contributions are welcome! Please feel free to submit a Pull Request. 🎁
 
 When contributing code:
-1. Make sure all tests pass with the AIplatform provider 
+1. Make sure all tests pass with the AIplatform provider
 2. Update documentation as needed
 3. Follow the existing code style
 4. Run `mltools-cli aws-login` before testing any changes

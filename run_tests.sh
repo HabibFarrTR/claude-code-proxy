@@ -60,14 +60,14 @@ cleanup() {
         echo "Stopping server (PID: $SERVER_PID)..."
         kill $SERVER_PID 2>/dev/null || true
     fi
-    
+
     # Kill any leftover uvicorn processes on our port
     LEFTOVER_PID=$(lsof -i:$PORT -t 2>/dev/null || true)
     if [ -n "$LEFTOVER_PID" ]; then
         echo "Killing leftover process on port $PORT (PID: $LEFTOVER_PID)..."
         kill $LEFTOVER_PID 2>/dev/null || true
     fi
-    
+
     echo "Cleanup complete"
 }
 
@@ -92,7 +92,7 @@ if [[ "$TEST_FILTER" == "::test_aiplatform" ]] && [[ "$SKIP_AUTH" == "false" ]];
     echo "🔑 IMPORTANT: To test AIplatform, you need to run 'mltools-cli aws-login' first"
     echo "   This is required to set up AWS credentials for Thomson Reuters authentication"
     echo ""
-    
+
     # Automatically assume yes for now since the user has already logged in
     REPLY="y"
 fi
@@ -108,7 +108,7 @@ for i in {1..10}; do
         echo "Server is up and running"
         break
     fi
-    
+
     if ! ps -p $SERVER_PID > /dev/null; then
         echo "Server process died!"
         if [ "$VERBOSE" == "true" ]; then
@@ -119,7 +119,7 @@ for i in {1..10}; do
         fi
         exit 1
     fi
-    
+
     echo "Waiting... ($i/10)"
     sleep 1
 done
