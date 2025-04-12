@@ -22,6 +22,11 @@ async def handle_streaming(response_generator, original_request):
     Returns:
         An async generator yielding SSE formatted events
     """
+    logger.info("Starting to handle streaming response")
+    logger.info(f"Original request model: {original_request.model}")
+
+    # Send an initial empty message to establish the connection
+    yield ":\n\n"  # This is a comment line in SSE, helps ensure the connection is established
     try:
         # Send message_start event
         message_id = f"msg_{original_request.model.split('/')[-1]}-{original_request.messages[-1].content[:10]}"
@@ -63,11 +68,13 @@ async def handle_streaming(response_generator, original_request):
 
         # Process each chunk
         async for chunk in response_generator:
+            logger.info(f"Processing chunk: {chunk}")
             try:
                 # Check if this is the end of the response with usage data
                 if hasattr(chunk, "usage") and chunk.usage is not None:
                     if hasattr(chunk.usage, "completion_tokens"):
                         output_tokens = chunk.usage.completion_tokens
+                        logger.info(f"Found completion tokens: {output_tokens}")
 
                 # Handle text content and our custom anthropic events
                 if hasattr(chunk, "choices") and len(chunk.choices) > 0:
@@ -290,7 +297,10 @@ async def handle_streaming(response_generator, original_request):
                         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
 
                         # Send final [DONE] marker to match Anthropic's behavior
+                        logger.info("Sending [DONE] marker - end of stream")
                         yield "data: [DONE]\n\n"
+                        # Additional empty line to ensure proper SSE termination
+                        yield "\n"
                         return
             except Exception as e:
                 # Log error but continue processing other chunks

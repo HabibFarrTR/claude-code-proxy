@@ -143,7 +143,18 @@ async def create_message(request: MessagesRequest, raw_request: Request):
             )
 
             # Convert to Anthropic streaming format
-            return StreamingResponse(handle_streaming(response_generator, request), media_type="text/event-stream")
+            headers = {
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Important for Nginx to not buffer the response
+                "Transfer-Encoding": "chunked",
+            }
+            logger.info(f"Returning streaming response with headers: {headers}")
+            # Make sure both Content-Type header and media_type are set to text/event-stream
+            return StreamingResponse(
+                handle_streaming(response_generator, request), media_type="text/event-stream", headers=headers
+            )
         else:
             # For non-streaming requests
             logger.info("Using direct AI Platform integration for completion")

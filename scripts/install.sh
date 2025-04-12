@@ -99,7 +99,7 @@ check_dependencies() {
     PY_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
     PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
-    
+
     if [[ "$PY_MAJOR" -lt 3 || ("$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 8) ]]; then
         print_error "Python 3.8 or higher is required. Found: $PY_VERSION"
         exit 1
@@ -155,17 +155,17 @@ download_core_files() {
         local url="$GITHUB_REPO/raw/$VERSION/$file_path"
 
         mkdir -p "$(dirname "$target_dir/$file_path")"
-        
+
         # Add verbose output for debugging
         print_info "Downloading $file_path from $url"
-        
+
         # Add User-Agent header to avoid getting HTML error pages
         curl -s -L -o "$target_dir/$file_path" -H "User-Agent: Mozilla/5.0" "$url"
-        
+
         # Check if the downloaded file looks like HTML (likely an error page)
         if grep -q "<!DOCTYPE html>" "$target_dir/$file_path" 2>/dev/null; then
             print_warning "Warning: $file_path appears to contain HTML. Download might have failed."
-            
+
             # For .env.example, we'll handle it in setup_environment()
             if [[ "$file_path" != ".env.example" ]]; then
                 print_info "Creating empty file for $file_path"
@@ -196,11 +196,11 @@ download_core_files() {
     else
         # Create files locally instead of downloading
         print_info "GitHub download disabled. Creating files locally..."
-        
+
         # Create Python package directory
         mkdir -p "$INSTALL_DIR/src"
         touch "$INSTALL_DIR/src/__init__.py"
-        
+
         # Copy from local source if available
         if [[ -d "$(dirname "$0")/../src" ]]; then
             print_info "Found local source files, copying..."
@@ -214,7 +214,7 @@ download_core_files() {
                     echo "# Placeholder for $file - requires manual download" > "$INSTALL_DIR/src/$file"
                 fi
             done
-            
+
             # Copy .env.example if we have it locally
             if [[ -f "$(dirname "$0")/../.env.example" ]]; then
                 cp "$(dirname "$0")/../.env.example" "$INSTALL_DIR/"
@@ -252,7 +252,7 @@ check_python_requirements() {
         echo "   Try reinstalling with 'curl -s https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/install.sh | bash'"
         return 1
     }
-    
+
     # Check basic python modules
     python -c "import fastapi, uvicorn" 2>/dev/null || {
         echo "❌ Error: Required Python packages not found."
@@ -260,7 +260,7 @@ check_python_requirements() {
         pip install fastapi uvicorn python-dotenv google-auth
         return $?
     }
-    
+
     return 0
 }
 
@@ -277,7 +277,7 @@ case "\$1" in
         if [[ -n "\$2" ]]; then
             PORT="\$2"
         fi
-        
+
         # Check if already running
         if lsof -ti ":\$PORT" &>/dev/null; then
             echo "⚠️ Proxy is already running on port \$PORT"
@@ -287,7 +287,7 @@ case "\$1" in
 
         # Check Python requirements
         check_python_requirements || exit 1
-        
+
         # Check for .env file and offer to create if missing
         if [[ ! -f "\$INSTALL_DIR/.env" ]]; then
             echo "⚠️ No .env file found. Creating from template..."
@@ -322,7 +322,7 @@ ENVEOF
             echo "=== Starting Claude Proxy on port \$PORT at \$(date) ===" > "\$LOG_FILE"
             python -m uvicorn src.server:app --host 0.0.0.0 --port "\$PORT" \${@:3} >> "\$LOG_FILE" 2>&1 &
             PID=\$!
-            
+
             # Check if process is still running after 2 seconds
             sleep 2
             if kill -0 \$PID 2>/dev/null; then
@@ -342,7 +342,7 @@ ENVEOF
         if [[ -n "\$PID" ]]; then
             echo "🛑 Stopping proxy running on port \$PORT (PID: \$PID)..."
             kill "\$PID"
-            
+
             # Verify process was stopped
             sleep 1
             if kill -0 \$PID 2>/dev/null; then
@@ -370,7 +370,7 @@ ENVEOF
             echo "   PID: \$PID"
             echo "   Uptime: \${RUNTIME:-unknown}"
             echo "   Log file: \$LOG_FILE"
-            
+
             # Show latest log entries
             if [[ -f "\$LOG_FILE" ]]; then
                 echo ""
@@ -532,7 +532,7 @@ if [[ "\$1" == "--gemini" || "\$1" == "-g" ]]; then
     if ! is_proxy_running "\$PORT"; then
         echo "🚀 Starting proxy on port \$PORT..."
         claude-proxy start "\$PORT" &>/dev/null &
-        
+
         # Wait for proxy to start (with timeout)
         MAX_WAIT=10
         WAIT_TIME=0
@@ -543,13 +543,13 @@ if [[ "\$1" == "--gemini" || "\$1" == "-g" ]]; then
             WAIT_TIME=\$((WAIT_TIME + 1))
         done
         echo ""
-        
+
         if ! is_proxy_running "\$PORT"; then
             echo "❌ Failed to start proxy within \$MAX_WAIT seconds."
             echo "Check logs at /tmp/claude-proxy.log"
             exit 1
         fi
-        
+
         echo "✅ Proxy started successfully!"
     fi
 
@@ -605,7 +605,7 @@ elif [[ "\$1" == "--claude" || "\$1" == "-c" ]]; then
     if ! check_claude_available; then
         exit 1
     fi
-    
+
     # Run Claude with native API
     shift 1
     echo "🧠 Running Claude with native API..."
@@ -616,7 +616,7 @@ else
     if ! check_claude_available; then
         exit 1
     fi
-    
+
     # Default to native Claude API
     echo "🧠 Running Claude with native API..."
     unset ANTHROPIC_BASE_URL
@@ -672,7 +672,7 @@ MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
 # - claude-3-haiku → gemini-2.0-flash
 EOF
         fi
-        
+
         # Validate the final .env file
         if grep -q "<!DOCTYPE html>" "$INSTALL_DIR/.env" || \
            ! grep -q "WORKSPACE_ID" "$INSTALL_DIR/.env"; then
@@ -693,7 +693,7 @@ MODEL_NAME="gemini-2.5-pro-preview-03-25" # The primary AIplatform model to use
 # - claude-3-haiku → gemini-2.0-flash
 EOF
         fi
-        
+
         print_warning "Please edit $INSTALL_DIR/.env and set your configuration."
     else
         # Check if existing .env file is valid (not HTML)
@@ -702,7 +702,7 @@ EOF
             print_warning "Existing .env file contains invalid content. Creating new default .env file..."
             mv "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.broken"
             print_info "Backed up invalid .env to .env.broken"
-            
+
             cat > "$INSTALL_DIR/.env" << EOF
 # Thomson Reuters AIplatform Configuration
 # IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
