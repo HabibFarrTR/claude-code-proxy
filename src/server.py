@@ -1,4 +1,5 @@
 import asyncio
+import enum
 import json
 import logging
 import os
@@ -16,13 +17,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from google.oauth2.credentials import Credentials as OAuth2Credentials
 from pydantic import BaseModel, field_validator
 from vertexai.generative_models import GenerativeModel
+from vertexai.generative_models._generative_models import ResponseBlockedError, FinishReason
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Using DEBUG level for more detailed logs during testing
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -189,512 +191,297 @@ class AIPlatformClient:
         messages: List[Dict[str, Any]],
         system_message: Optional[str] = None,
         stream: bool = False,
-    ) -> Dict[str, Any]:
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+    ) -> Union[Dict[str, Any], AsyncGenerator[Any, None]]:
         """
-        Send a completion request to AI Platform.
+        Send a completion request to AI Platform using Vertex AI SDK.
+        Handles both streaming and non-streaming requests.
 
         Args:
-            model_name: The AI Platform model name without the prefix
+            model_name: The AI Platform model name
             messages: List of message objects with role and content
-            system_message: Optional system message to prepend
+            system_message: Optional system message for the model
             stream: Whether to stream the response
+            max_tokens: Maximum number of tokens to generate
+            temperature: Sampling temperature
+            top_p: Nucleus sampling parameter
+            top_k: Top-k sampling parameter
+            stop_sequences: List of sequences to stop generation
 
         Returns:
-            The response from AI Platform in a format compatible with our processing
+            For non-streaming: Dict with response data
+            For streaming: AsyncGenerator yielding response chunks
         """
         self.ensure_initialized()
 
         try:
-            logger.info(f"Direct Vertex AI request for model: {model_name}")
+            logger.info(f"Vertex AI request: model={model_name}, stream={stream}")
 
-            # Create the Vertex AI model
-            model = GenerativeModel(model_name)
+            # Create the Vertex AI model instance with system instruction if provided
+            generation_config = {}
+            if system_message:
+                # For Gemini, system instruction is passed directly
+                model = GenerativeModel(model_name, system_instruction=system_message)
+            else:
+                model = GenerativeModel(model_name)
+            
+            # Configure generation parameters
+            if max_tokens is not None:
+                generation_config["max_output_tokens"] = max_tokens
+            if temperature is not None:
+                generation_config["temperature"] = temperature
+            if top_p is not None:
+                generation_config["top_p"] = top_p
+            if top_k is not None:
+                generation_config["top_k"] = top_k
+            if stop_sequences:
+                generation_config["stop_sequences"] = stop_sequences
 
-            # Start a chat session
-            chat = model.start_chat(response_validation=False)
-
-            # Process the messages to build the conversation history
-            history = []
-
+            # Process the messages to build conversation history for Vertex AI
+            vertex_messages = []
             for msg in messages:
                 role = msg.get("role")
                 content = msg.get("content", "")
+                
+                # Gemini uses 'user' and 'model' roles
+                vertex_role = "user" if role == "user" else "model"
+                
+                # Handle different content formats
+                if isinstance(content, str):
+                    vertex_messages.append({
+                        "role": vertex_role,
+                        "parts": [{"text": content}]
+                    })
+                elif isinstance(content, list):
+                    # Simplify complex content to text for now
+                    text_content = ""
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text_content += item.get("text", "") + "\n"
+                        # Basic handling for tool results
+                        elif isinstance(item, dict) and item.get("type") == "tool_result":
+                            tool_id = item.get("tool_use_id", "unknown")
+                            result_content = parse_tool_result_content(item.get("content", ""))
+                            text_content += f"[Tool Result for {tool_id}]:\n{result_content}\n"
+                    
+                    if text_content.strip():
+                        vertex_messages.append({
+                            "role": vertex_role,
+                            "parts": [{"text": text_content.strip()}]
+                        })
+                        
+            # Initialize chat session if needed
+            # Note: We'll use generate_content directly instead of chat for better streaming control
 
-                # Build conversation history
-                if role in ["user", "assistant"]:
-                    if isinstance(content, str):
-                        history.append({"role": role, "content": content})
-                    else:
-                        # Convert complex content to text
-                        if isinstance(content, list):
-                            text_content = ""
-                            for item in content:
-                                if isinstance(item, dict):
-                                    if item.get("type") == "text":
-                                        text_content += item.get("text", "") + "\n"
-                            history.append({"role": role, "content": text_content.strip()})
-
-            # Find the last user message which we'll send to the model
-            last_user_msg = None
-            for msg in reversed(history):
-                if msg["role"] == "user":
-                    last_user_msg = msg["content"]
-                    break
-
-            if not last_user_msg:
-                raise ValueError("No user message found in the conversation")
-
-            # Construct the complete prompt with system message if available
-            prompt = last_user_msg
-            if system_message:
-                prompt = f"{system_message}\n\n{prompt}"
-
-            # If streaming is enabled
+            # If streaming is enabled, return a generator
             if stream:
-                return self._stream_response(model_name, chat, prompt)
+                logger.info("Streaming mode: Using generate_content with stream=True")
+                try:
+                    # Use generate_content with streaming - make it asynchronous
+                    # Vertex AI's generate_content is synchronous and blocking,
+                    # so we'll run it in a thread and convert to an async iterator
+                    
+                    # Get the stream generator from Vertex AI in a separate thread
+                    stream_generator = await asyncio.to_thread(
+                        model.generate_content,
+                        vertex_messages,
+                        stream=True,
+                        generation_config=generation_config if generation_config else None
+                    )
+                    
+                    # Create an async generator adapter for the synchronous iterator
+                    async def async_stream_adapter():
+                        # We're using a regular for loop with the synchronous iterator
+                        # but yielding asynchronously to avoid blocking the event loop
+                        for chunk in stream_generator:
+                            yield chunk
+                            # Small delay to avoid overwhelming the event loop
+                            await asyncio.sleep(0.01)
+                    
+                    response_stream = async_stream_adapter()
+                    
+                    return response_stream
+                except Exception as e:
+                    logger.error(f"Error initializing stream from Vertex AI: {e}", exc_info=True)
+                    raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")
             else:
                 # For non-streaming requests
-                response = chat.send_message(prompt)
-
-                # Extract response content (text or executable code)
-                response_text = ""
+                logger.info("Non-streaming mode: Using generate_content")
                 try:
-                    response_text = response.text
-                except (AttributeError, ValueError) as e:
-                    logger.warning(f"Could not get text from response: {e}")
-
-                    # Log detailed diagnostics about the response structure
-                    if hasattr(response, "candidates") and response.candidates:
-                        candidate = response.candidates[0]
-                        part = None
-                        if (
-                            hasattr(candidate, "content")
-                            and candidate.content
-                            and hasattr(candidate.content, "parts")
-                            and candidate.content.parts
-                        ):
-                            part = candidate.content.parts[0]
-
-                        # Try extracting raw format details
-                        part_str = str(part) if part else "No parts available"
-                        candidate_str = str(candidate) if candidate else "No candidate available"
-                        response_str = str(response) if response else "No response available"
-
-                        logger.info("Received response with executable code. Processing format.")
-                        logger.debug(
-                            f"Response structure - Part: {part_str}, Candidate: {candidate_str}, Response: {response_str}"
-                        )
-
-                    # Check if it's executable code - handle both dictionary and object access patterns
-                    if hasattr(response, "candidates") and response.candidates:
-                        candidate = response.candidates[0]
-
-                        # Try to extract from raw response if available
-                        if hasattr(response, "_raw_response"):
+                    # Run the blocking call in a thread to avoid blocking the FastAPI event loop
+                    response = await asyncio.to_thread(
+                        model.generate_content,
+                        vertex_messages,
+                        generation_config=generation_config if generation_config else None
+                    )
+                    
+                    # Extract response content
+                    response_text = ""
+                    tool_calls = []
+                    finish_reason = None
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    
+                    # Extract usage metadata if available
+                    if hasattr(response, "usage_metadata") and response.usage_metadata:
+                        prompt_tokens = response.usage_metadata.prompt_token_count
+                        completion_tokens = response.usage_metadata.candidates_token_count
+                    
+                    # Extract finish reason
+                    if response.candidates and response.candidates[0].finish_reason:
+                        finish_reason = response.candidates[0].finish_reason
+                    
+                    # Extract content and function calls
+                    if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                        for part in response.candidates[0].content.parts:
                             try:
-                                raw_str = str(response._raw_response)
-                                # Extract code with basic string parsing for prototype
-                                if "executable_code" in raw_str and "code:" in raw_str:
-                                    try:
-                                        code_start = raw_str.find("code:") + 6  # Skip "code: "
-                                        code_end = raw_str.find('"', code_start + 1)
-                                        while raw_str[code_end - 1] == "\\":  # Handle escaped quotes
-                                            code_end = raw_str.find('"', code_end + 1)
-                                        code = raw_str[code_start:code_end]
-                                        # Unescape the code
-                                        code = code.replace('\\"', '"').replace("\\n", "\n")
-
-                                        language_start = raw_str.find("language:") + 10
-                                        language_end = raw_str.find("\n", language_start)
-                                        language = raw_str[language_start:language_end].strip()
-
-                                        response_text = f"```{language.lower()}\n{code}\n```"
-                                        logger.info(f"Successfully extracted code: {code[:50]}... as {language}")
-                                    except Exception as e:
-                                        logger.warning(f"Error parsing raw executable code: {e}")
-                            except Exception as e:
-                                logger.warning(f"Error accessing or processing raw response: {e}")
-
-                        # If we couldn't extract from raw, try the object approach or direct string parsing from part
-                        if not response_text:
-                            if hasattr(candidate, "content") and candidate.content:
-                                content = candidate.content
-                                if hasattr(content, "parts") and content.parts:
-                                    for part in content.parts:
-                                        # First try direct attribute access
-                                        if hasattr(part, "executable_code") and part.executable_code:
-                                            try:
-                                                code = part.executable_code.code
-                                                language = part.executable_code.language
-                                                response_text = f"```{language.lower()}\n{code}\n```"
-                                                logger.info(
-                                                    f"Successfully extracted code: {code[:50]}... as {language}"
-                                                )
-                                                break
-                                            except Exception as e:
-                                                logger.warning(f"Error accessing executable_code properties: {e}")
-
-                                        # If direct access fails, try string parsing from part representation
-                                        if not response_text:
-                                            part_str = str(part)
-                                            if "executable_code" in part_str and "code:" in part_str:
-                                                try:
-                                                    code_start = part_str.find("code:") + 6
-                                                    code_end = part_str.find('"', code_start + 1)
-                                                    while part_str[code_end - 1] == "\\":
-                                                        code_end = part_str.find('"', code_end + 1)
-                                                    code = part_str[code_start:code_end]
-                                                    code = code.replace('\\"', '"').replace("\\n", "\n")
-
-                                                    language_start = part_str.find("language:") + 10
-                                                    language_end = part_str.find("\n", language_start)
-                                                    language = part_str[language_start:language_end].strip()
-
-                                                    response_text = f"```{language.lower()}\n{code}\n```"
-                                                    logger.info(
-                                                        f"Successfully extracted code: {code[:50]}... as {language}"
-                                                    )
-                                                    break
-                                                except Exception as e:
-                                                    logger.warning(f"Error parsing part string for code: {e}")
-                    # If we still couldn't extract content, use a fallback message
-                    if not response_text:
-                        response_text = (
-                            "I attempted to use a tool, but this feature is not fully supported in this environment."
-                        )
-
-                # Convert to formatted response
-                return {
-                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": model_name,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": response_text},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": len(prompt) // 4,  # Rough estimation
-                        "completion_tokens": len(response_text) // 4,  # Rough estimation
-                        "total_tokens": (len(prompt) + len(response_text)) // 4,  # Rough estimation
-                    },
-                }
+                                if hasattr(part, "text") and part.text:
+                                    response_text += part.text
+                            except (ValueError, AttributeError) as e:
+                                logger.debug(f"Could not get part.text: {e}")
+                                
+                            if hasattr(part, "function_call") and part.function_call:
+                                # Handle function call
+                                fc = part.function_call
+                                tool_calls.append({
+                                    "id": f"toolu_{uuid.uuid4().hex[:24]}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": fc.name,
+                                        "arguments": json.dumps(fc.args)
+                                    }
+                                })
+                            
+                            # Handle executable_code (Gemini's way of representing tool calls)
+                            elif hasattr(part, "executable_code") and part.executable_code:
+                                logger.info(f"Found executable_code in non-streaming response: {part.executable_code.language}")
+                                
+                                # Parse the tool code from executable_code
+                                code = part.executable_code.code
+                                logger.debug(f"Executable code: {code}")
+                                
+                                # Try to extract tool call info from the code
+                                import re
+                                
+                                # Extract all tool code blocks
+                                tool_blocks = re.findall(r'<tool_code>(.*?)</tool_code>', code, re.DOTALL)
+                                
+                                for tool_block in tool_blocks:
+                                    # Extract tool name
+                                    tool_name_match = re.search(r'<tool_name>(.*?)</tool_name>', tool_block, re.DOTALL)
+                                    if tool_name_match:
+                                        tool_name = tool_name_match.group(1).strip()
+                                        
+                                        # Extract args
+                                        args = {}
+                                        args_section = re.search(r'<args>(.*?)</args>', tool_block, re.DOTALL)
+                                        if args_section:
+                                            args_text = args_section.group(1).strip()
+                                            # Parse individual arg tags
+                                            arg_matches = re.findall(r'<(\w+)>(.*?)</\1>', args_text, re.DOTALL)
+                                            for arg_name, arg_value in arg_matches:
+                                                args[arg_name] = arg_value.strip()
+                                        
+                                        # Add as a tool call
+                                        tool_calls.append({
+                                            "id": f"toolu_{uuid.uuid4().hex[:24]}",
+                                            "type": "function",
+                                            "function": {
+                                                "name": tool_name,
+                                                "arguments": json.dumps(args)
+                                            }
+                                        })
+                                        logger.info(f"Extracted tool call from executable_code: {tool_name} with args {args}")
+                    
+                    # Map finish reason to OpenAI/Anthropic format
+                    openai_finish_reason = "stop"
+                    if finish_reason:
+                        logger.debug(f"Mapping finish reason (non-streaming): {finish_reason}")
+                        # Handle both enum values and string representations
+                        if finish_reason == "MAX_TOKENS" or (hasattr(FinishReason, "MAX_TOKENS") and finish_reason == FinishReason.MAX_TOKENS):
+                            openai_finish_reason = "length"
+                        elif finish_reason == "SAFETY" or (hasattr(FinishReason, "SAFETY") and finish_reason == FinishReason.SAFETY):
+                            openai_finish_reason = "content_filter"
+                        elif finish_reason == "FUNCTION_CALL" or (hasattr(FinishReason, "FUNCTION_CALL") and finish_reason == FinishReason.FUNCTION_CALL):
+                            openai_finish_reason = "tool_calls"
+                        elif finish_reason == "RECITATION" or (hasattr(FinishReason, "RECITATION") and finish_reason == FinishReason.RECITATION):
+                            # Recitation issues are similar to safety
+                            openai_finish_reason = "content_filter"
+                        elif finish_reason == "STOP" or (hasattr(FinishReason, "STOP") and finish_reason == FinishReason.STOP):
+                            openai_finish_reason = "stop"
+                        # All other reasons map to "stop" by default
+                        
+                    # If we have tool_calls, force the finish reason
+                    if tool_calls:
+                        openai_finish_reason = "tool_calls"
+                        logger.info(f"Setting finish_reason to 'tool_calls' due to tool_calls presence")
+                    
+                    # Estimate tokens if not provided by the API
+                    if prompt_tokens == 0:
+                        # Rough estimation based on character count
+                        prompt_text = ""
+                        for msg in messages:
+                            content = msg.get("content", "")
+                            if isinstance(content, str):
+                                prompt_text += content
+                            elif isinstance(content, list):
+                                for item in content:
+                                    if isinstance(item, dict) and item.get("type") == "text":
+                                        prompt_text += item.get("text", "") + "\n"
+                        prompt_tokens = len(prompt_text) // 4
+                    
+                    if completion_tokens == 0:
+                        completion_tokens = len(response_text) // 4
+                    
+                    # Return in OpenAI-compatible format
+                    return {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": model_name,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": response_text,
+                                    "tool_calls": tool_calls if tool_calls else None
+                                },
+                                "finish_reason": openai_finish_reason,
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": prompt_tokens + completion_tokens,
+                        },
+                    }
+                
+                except ResponseBlockedError as rbe:
+                    logger.error(f"Response blocked by Vertex AI: {rbe}", exc_info=True)
+                    raise HTTPException(status_code=400, detail=f"Response blocked by safety filters: {rbe.block_reason}")
+                except Exception as e:
+                    logger.error(f"Error in Vertex AI completion: {e}", exc_info=True)
+                    raise HTTPException(status_code=500, detail=f"Completion error: {str(e)}")
 
         except Exception as e:
             logger.error(f"Error in direct Vertex AI integration: {e}", exc_info=True)
             raise
-
-    async def _stream_response(self, model_name: str, chat, prompt: str) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Generate streaming responses in Anthropic-compatible format.
-
-        Args:
-            model_name: The AI Platform model name
-            chat: The VertexAI chat session
-            prompt: The prompt to send
-
-        Returns:
-            An async generator yielding response chunks
-        """
-        try:
-            response = chat.send_message(prompt)
-
-            # Get the response content
-            # Handle different response types (text or executable code)
-            response_text = ""
-            try:
-                response_text = response.text
-            except (AttributeError, ValueError) as e:
-                logger.warning(f"Could not get text from response: {e}")
-
-                # Log detailed diagnostics about the response structure
-                if hasattr(response, "candidates") and response.candidates:
-                    candidate = response.candidates[0]
-                    part = None
-                    if (
-                        hasattr(candidate, "content")
-                        and candidate.content
-                        and hasattr(candidate.content, "parts")
-                        and candidate.content.parts
-                    ):
-                        part = candidate.content.parts[0]
-
-                    # Try extracting raw format details
-                    part_str = str(part) if part else "No parts available"
-                    candidate_str = str(candidate) if candidate else "No candidate available"
-                    response_str = str(response) if response else "No response available"
-
-                    logger.info("Stream received response with executable code. Processing format.")
-                    logger.debug(
-                        f"Stream response structure - Part: {part_str}, Candidate: {candidate_str}, Response: {response_str}"
-                    )
-
-                # Check if it's executable code - handle both dictionary and object access patterns
-                if hasattr(response, "candidates") and response.candidates:
-                    candidate = response.candidates[0]
-
-                    # Try to extract from raw response if available
-                    if hasattr(response, "_raw_response"):
-                        try:
-                            raw_str = str(response._raw_response)
-                            # Extract code with basic string parsing for prototype
-                            if "executable_code" in raw_str and "code:" in raw_str:
-                                try:
-                                    code_start = raw_str.find("code:") + 6  # Skip "code: "
-                                    code_end = raw_str.find('"', code_start + 1)
-                                    while raw_str[code_end - 1] == "\\":  # Handle escaped quotes
-                                        code_end = raw_str.find('"', code_end + 1)
-                                    code = raw_str[code_start:code_end]
-                                    # Unescape the code
-                                    code = code.replace('\\"', '"').replace("\\n", "\n")
-
-                                    language_start = raw_str.find("language:") + 10
-                                    language_end = raw_str.find("\n", language_start)
-                                    language = raw_str[language_start:language_end].strip()
-
-                                    response_text = f"```{language.lower()}\n{code}\n```"
-                                    logger.info(f"Successfully extracted code: {code[:50]}... as {language}")
-                                except Exception as e:
-                                    logger.warning(f"Error parsing raw executable code: {e}")
-                        except Exception as e:
-                            logger.warning(f"Error accessing or processing raw response: {e}")
-
-                    # If we couldn't extract from raw, try the object approach or direct string parsing from part
-                    if not response_text:
-                        if hasattr(candidate, "content") and candidate.content:
-                            content = candidate.content
-                            if hasattr(content, "parts") and content.parts:
-                                for part in content.parts:
-                                    # First try direct attribute access
-                                    if hasattr(part, "executable_code") and part.executable_code:
-                                        try:
-                                            code = part.executable_code.code
-                                            language = part.executable_code.language
-                                            response_text = f"```{language.lower()}\n{code}\n```"
-                                            logger.info(f"Successfully extracted code: {code[:50]}... as {language}")
-                                            break
-                                        except Exception as e:
-                                            logger.warning(f"Error accessing executable_code properties: {e}")
-
-                                    # If direct access fails, try string parsing from part representation
-                                    if not response_text:
-                                        part_str = str(part)
-                                        if "executable_code" in part_str and "code:" in part_str:
-                                            try:
-                                                code_start = part_str.find("code:") + 6
-                                                code_end = part_str.find('"', code_start + 1)
-                                                while part_str[code_end - 1] == "\\":
-                                                    code_end = part_str.find('"', code_end + 1)
-                                                code = part_str[code_start:code_end]
-                                                code = code.replace('\\"', '"').replace("\\n", "\n")
-
-                                                language_start = part_str.find("language:") + 10
-                                                language_end = part_str.find("\n", language_start)
-                                                language = part_str[language_start:language_end].strip()
-
-                                                response_text = f"```{language.lower()}\n{code}\n```"
-                                                logger.info(
-                                                    f"Successfully extracted code: {code[:50]}... as {language}"
-                                                )
-                                                break
-                                            except Exception as e:
-                                                logger.warning(f"Error parsing part string for code: {e}")
-                # If we still couldn't extract content, use a fallback message
-                if not response_text:
-                    response_text = (
-                        "I attempted to use a tool, but this feature is not fully supported in this environment."
-                    )
-
-            # Simulate Anthropic streaming format for the handle_streaming function
-            logger.info("Beginning to yield streaming response chunks")
-
-            # 1. Generate message_start event
-            message_id = f"msg_{uuid.uuid4().hex[:24]}"
-            chunk = {
-                "choices": [
-                    {
-                        "delta": {
-                            "anthropic_event": "message_start",
-                            "message": {
-                                "id": message_id,
-                                "type": "message",
-                                "role": "assistant",
-                                "content": [],
-                                "model": model_name,
-                            },
-                        },
-                        "index": 0,
-                        "finish_reason": None,
-                    }
-                ],
-                "created": int(time.time()),
-                "model": model_name,
-                "object": "chat.completion.chunk",
-            }
-            logger.info(f"Yielding message_start chunk: {chunk}")
-            yield chunk
-
-            # 2. Generate content_block_start event
-            block_id = 0
-            block_chunk = {
-                "choices": [
-                    {
-                        "delta": {
-                            "anthropic_event": "content_block_start",
-                            "index": block_id,
-                            "content_block": {"type": "text", "text": ""},
-                        },
-                        "index": 0,
-                        "finish_reason": None,
-                    }
-                ],
-                "created": int(time.time()),
-                "model": model_name,
-                "object": "chat.completion.chunk",
-            }
-            logger.info(f"Yielding content_block_start chunk: {block_chunk}")
-            yield block_chunk
-
-            # 3. Generate ping event (common in Anthropic streams)
-            ping_chunk = {
-                "choices": [{"delta": {"anthropic_event": "ping"}, "index": 0, "finish_reason": None}],
-                "created": int(time.time()),
-                "model": model_name,
-                "object": "chat.completion.chunk",
-            }
-            logger.info(f"Yielding ping chunk: {ping_chunk}")
-            yield ping_chunk
-
-            # 4. Stream the response in small chunks with content_block_delta events
-            # Add debugging to see response content
-            logger.info(f"Preparing to stream response. Text content: '{response_text}'")
-
-            # For non-empty responses, stream the text in small chunks to simulate streaming
-            if response_text.strip():
-                logger.info(f"Streaming non-empty response text ({len(response_text)} chars) in chunks")
-                # Stream in smaller chunks to better simulate streaming
-                chunk_size = 10  # Smaller chunks look more like real streaming
-                for i in range(0, len(response_text), chunk_size):
-                    text_chunk = response_text[i : i + chunk_size]
-                    delta_chunk = {
-                        "choices": [
-                            {
-                                "delta": {
-                                    "anthropic_event": "content_block_delta",
-                                    "index": block_id,
-                                    "delta": {"type": "text_delta", "text": text_chunk},
-                                },
-                                "index": 0,
-                                "finish_reason": None,
-                            }
-                        ],
-                        "created": int(time.time()),
-                        "model": model_name,
-                        "object": "chat.completion.chunk",
-                    }
-                    logger.info(
-                        f"Yielding content chunk {i//chunk_size+1}/{(len(response_text)//chunk_size)+1}: '{text_chunk}'"
-                    )
-                    yield delta_chunk
-
-                    # Small delay for natural feeling
-                    await asyncio.sleep(0.02)
-            else:
-                logger.info("Empty response text, sending fallback content block")
-                # If empty response, still emit a content_block_delta
-                empty_chunk = {
-                    "choices": [
-                        {
-                            "delta": {
-                                "anthropic_event": "content_block_delta",
-                                "index": block_id,
-                                "delta": {"type": "text_delta", "text": "No response text available."},
-                            },
-                            "index": 0,
-                            "finish_reason": None,
-                        }
-                    ],
-                    "created": int(time.time()),
-                    "model": model_name,
-                    "object": "chat.completion.chunk",
-                }
-                logger.info(f"Yielding empty content chunk: {empty_chunk}")
-                yield empty_chunk
-
-            # 5. Generate content_block_stop event
-            logger.info("Sending content_block_stop event")
-            content_stop_chunk = {
-                "choices": [
-                    {
-                        "delta": {"anthropic_event": "content_block_stop", "index": block_id},
-                        "index": 0,
-                        "finish_reason": None,
-                    }
-                ],
-                "created": int(time.time()),
-                "model": model_name,
-                "object": "chat.completion.chunk",
-            }
-            logger.info(f"Yielding content_block_stop chunk: {content_stop_chunk}")
-            yield content_stop_chunk
-
-            # 6. Generate message_delta event
-            logger.info("Sending message_delta event with stop_reason")
-            output_tokens = len(response_text) // 4
-            message_delta_chunk = {
-                "choices": [
-                    {
-                        "delta": {
-                            "anthropic_event": "message_delta",
-                            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                            "usage": {"output_tokens": output_tokens},
-                        },
-                        "index": 0,
-                        "finish_reason": None,
-                    }
-                ],
-                "created": int(time.time()),
-                "model": model_name,
-                "object": "chat.completion.chunk",
-            }
-            logger.info(f"Yielding message_delta chunk with {output_tokens} tokens: {message_delta_chunk}")
-            yield message_delta_chunk
-
-            # 7. Generate message_stop event
-            logger.info("Sending message_stop event")
-            message_stop_chunk = {
-                "choices": [{"delta": {"anthropic_event": "message_stop"}, "index": 0, "finish_reason": "stop"}],
-                "created": int(time.time()),
-                "model": model_name,
-                "object": "chat.completion.chunk",
-            }
-            logger.info(f"Yielding message_stop chunk: {message_stop_chunk}")
-            yield message_stop_chunk
-        except Exception as e:
-            logger.error(f"Error in streaming generation: {e}", exc_info=True)
-            # If there's an error, still try to emit some events to avoid hanging clients
-            error_chunk = {
-                "choices": [{"delta": {"content": f"Error: {str(e)}"}, "index": 0, "finish_reason": "stop"}],
-                "created": int(time.time()),
-                "model": model_name,
-                "object": "chat.completion.chunk",
-            }
-            logger.error(f"Yielding error chunk: {error_chunk}")
-            yield error_chunk
-
-            # Even with an error, try to properly close the stream with a [DONE] marker
-            logger.info("Sending [DONE] marker after error")
-            yield "data: [DONE]\n\n"
 
 
 # Create a singleton instance
 aiplatform_client = AIPlatformClient()
 
 # Initialize AI Platform client
-aiplatform_client.initialize()
+try:
+    aiplatform_client.initialize()
+except Exception as e:
+    logger.critical(f"CRITICAL: Failed to initialize AIPlatformClient. Server cannot function. Error: {e}", exc_info=True)
+    # The server will still start, but requests will fail until authentication works
 
 
 # Content Block Models
@@ -829,213 +616,557 @@ class MessagesResponse(BaseModel):
     usage: Usage
 
 
-async def handle_streaming(response_generator, original_request):
+async def handle_vertex_streaming(response_generator, original_request: MessagesRequest):
     """
-    Handle streaming responses and convert to Anthropic format.
-
-    Takes a generator that yields response chunks and converts them to
-    Server-Sent Events (SSE) in Anthropic's format.
-
-    Args:
-        response_generator: An async generator yielding response chunks
-        original_request: The original request object
-
-    Returns:
-        An async generator yielding SSE formatted events
+    Handles the raw streaming response from Vertex AI model.generate_content(stream=True)
+    and converts it to Anthropic-compatible Server-Sent Events.
+    
+    The response_generator should be an async generator that yields chunks from Vertex AI.
+    These chunks are processed and converted to the Anthropic streaming format.
     """
-    logger.info("Beginning to yield streaming response chunks")
+    message_id = f"msg_{uuid.uuid4().hex[:24]}"
+    model_name = original_request.original_model or original_request.model  # Use original name for client
+    input_tokens = 0
+    output_tokens = 0
+
     try:
-        # Send message_start event
-        message_id = f"msg_{uuid.uuid4().hex[:24]}"  # Format similar to Anthropic's IDs
-
-        message_data = {
-            "choices": [
-                {
-                    "delta": {
-                        "anthropic_event": "message_start",
-                        "message": {
-                            "id": message_id,
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [],
-                            "model": original_request.model,
-                        },
-                    },
-                    "index": 0,
-                    "finish_reason": None,
-                }
-            ],
-            "created": int(uuid.uuid1().time // 1000),
-            "model": original_request.model,
-            "object": "chat.completion.chunk",
+        # 1. Send message_start event
+        message_start_data = {
+            'type': 'message_start',
+            'message': {
+                'id': message_id,
+                'type': 'message',
+                'role': 'assistant',
+                'model': model_name,
+                'content': [],
+                'stop_reason': None,
+                'stop_sequence': None,
+                'usage': {'input_tokens': 0, 'output_tokens': 0}  # Placeholder
+            }
         }
-        logger.info(f"Yielding message_start chunk: {message_data}")
-        yield f"data: {json.dumps(message_data)}\n\n"
-        logger.info(f"Processing chunk: {message_data}")
+        yield f"event: message_start\ndata: {json.dumps(message_start_data)}\n\n"
+        logger.debug("Sent message_start")
 
-        # Content block start event
-        content_block_start = {
-            "choices": [
-                {
-                    "delta": {
-                        "anthropic_event": "content_block_start",
-                        "index": 0,
-                        "content_block": {"type": "text", "text": ""},
-                    },
-                    "index": 0,
-                    "finish_reason": None,
-                }
-            ],
-            "created": int(uuid.uuid1().time // 1000),
-            "model": original_request.model,
-            "object": "chat.completion.chunk",
+        # 2. Send ping event
+        yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
+        logger.debug("Sent ping")
+
+        # State tracking
+        current_content_block_index = -1
+        current_block_type = None  # 'text' or 'tool_use'
+        current_tool_id = None
+        current_tool_name = None
+        accumulated_tool_args = ""
+        text_block_started = False
+        tool_blocks = []  # Keep track of tool blocks used
+        accumulated_text = ""
+
+        # 3. Process the stream from Vertex AI
+        # Start with a text block for initial content
+        current_content_block_index = 0
+        current_block_type = 'text'
+        text_block_start_data = {
+            'type': 'content_block_start',
+            'index': current_content_block_index,
+            'content_block': {'type': 'text', 'text': ""}
         }
-        logger.info(f"Yielding content_block_start chunk: {content_block_start}")
-        yield f"data: {json.dumps(content_block_start)}\n\n"
-        logger.info(f"Processing chunk: {content_block_start}")
+        yield f"event: content_block_start\ndata: {json.dumps(text_block_start_data)}\n\n"
+        logger.debug(f"Sent content_block_start for initial text block {current_content_block_index}")
+        text_block_started = True
 
-        # Send a ping to keep the connection alive
-        ping_data = {
-            "choices": [{"delta": {"anthropic_event": "ping"}, "index": 0, "finish_reason": None}],
-            "created": int(uuid.uuid1().time // 1000),
-            "model": original_request.model,
-            "object": "chat.completion.chunk",
-        }
-        logger.info(f"Yielding ping chunk: {ping_data}")
-        yield f"data: {json.dumps(ping_data)}\n\n"
-        logger.info(f"Processing chunk: {ping_data}")
+        async for chunk in response_generator:
+            logger.debug(f"Raw Vertex Chunk: {chunk}")
 
-        # Process the streaming responses
-        content_text = ""
-        output_tokens = 0
-        content_chunks = []
+            chunk_text = ""
+            chunk_function_call = None # Reset for each chunk
+            chunk_finish_reason = None
+            is_last_chunk = False
 
-        # Process content from the AI response
-        async for resp in response_generator:
-            # Extract text from the AI response
-            text_content = None
             try:
-                # Try to get text from Vertex AI response
-                if hasattr(resp, "candidates") and resp.candidates:
-                    candidate = resp.candidates[0]
-                    # Handle code blocks specifically for Gemini
-                    if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                # --- Start: Parsing Logic ---
+                # Start with empty text and function call
+                chunk_text = ""
+                chunk_function_call = None
+                
+                # Check candidates for parts (text, function_call, executable_code)
+                if hasattr(chunk, "candidates") and chunk.candidates:
+                    candidate = chunk.candidates[0]
+
+                    if hasattr(candidate, "content") and candidate.content and hasattr(candidate.content, "parts"):
                         for part in candidate.content.parts:
-                            if hasattr(part, "text") and part.text:
-                                text_content = part.text
+                            # 1. Check for explicit function_call attribute
+                            if hasattr(part, "function_call") and part.function_call:
+                                chunk_function_call = part.function_call
+                                logger.info(f"Found native function_call: {chunk_function_call.name}")
+                                chunk_text = "" # Clear any text found if we have a function call
+                                break # Prioritize function_call over text/executable_code in the same part
+
+                            # 2. Check for executable_code and parse it ****** NEW LOGIC ******
                             elif hasattr(part, "executable_code") and part.executable_code:
-                                # Extract code as text
-                                logger.info("Stream received response with executable code. Processing format.")
+                                logger.info(f"Found executable_code: {part.executable_code.language}")
                                 code = part.executable_code.code
-                                language = part.executable_code.language.lower()
-                                logger.info(f'Successfully extracted code: "{code[:20]}... as {language}')
-                                text_content = f"```{language}\n{code}\n```"
+                                logger.debug(f"Executable code content: {code}")
 
-                # If we couldn't get text directly, log an error
-                if text_content is None and hasattr(resp, "candidates"):
-                    logger.warning(f"Could not get text from response: {resp}")
-            except Exception as ex:
-                logger.error(f"Error extracting text from response: {ex}")
-                continue
+                                import re
+                                # First try XML-style tool code pattern
+                                tool_blocks = re.findall(r'<tool_code>(.*?)</tool_code>', code, re.DOTALL)
 
-            # If we found text content, stream it in chunks
-            if text_content:
-                logger.info(f"Preparing to stream response. Text content: '{text_content}'")
-                content_text += text_content
+                                if tool_blocks:
+                                    tool_block = tool_blocks[0] # Assume one for now
+                                    tool_name_match = re.search(r'<tool_name>(.*?)</tool_name>', tool_block, re.DOTALL)
+                                    if tool_name_match:
+                                        tool_name = tool_name_match.group(1).strip()
+                                        args = {}
+                                        args_section = re.search(r'<args>(.*?)</args>', tool_block, re.DOTALL)
+                                        if args_section:
+                                            args_text = args_section.group(1).strip()
+                                            arg_matches = re.findall(r'<(\w+)>(.*?)</\1>', args_text, re.DOTALL)
+                                            for arg_name, arg_value in arg_matches:
+                                                # Attempt to decode JSON strings within args
+                                                try:
+                                                    # Handle potential double escaping
+                                                    decoded_value = json.loads(f'"{arg_value.strip()}"')
+                                                    args[arg_name] = decoded_value
+                                                except json.JSONDecodeError:
+                                                    args[arg_name] = arg_value.strip() # Fallback to raw string
 
-                # Stream the content in reasonable-sized chunks
-                chunk_size = 10  # Characters per chunk
-                num_chunks = (len(text_content) + chunk_size - 1) // chunk_size
-                logger.info(f"Streaming non-empty response text ({len(text_content)} chars) in chunks")
+                                        # Create a synthetic FunctionCall object for consistent handling
+                                        class SyntheticFunctionCall:
+                                            def __init__(self, name, args):
+                                                self.name = name
+                                                self.args = args
+                                        chunk_function_call = SyntheticFunctionCall(tool_name, args)
+                                        logger.info(f"Extracted tool call from executable_code XML format: {tool_name} with args {args}")
+                                        chunk_text = "" # Clear any text found
+                                        break # Prioritize this parsed call
+                                
+                                # Try backtick-style tool code pattern if XML pattern didn't match
+                                elif "```tool_code" in code:
+                                    logger.info("Found ```tool_code pattern in executable_code")
+                                    # Try to match ```tool_code format
+                                    tool_code_match = re.search(r'```tool_code\s+(.*?)```', code, re.DOTALL)
+                                    if tool_code_match:
+                                        tool_content = tool_code_match.group(1).strip()
+                                        logger.debug(f"Found tool_code content: {tool_content}")
+                                        
+                                        # Extract tool name from typical pattern like ReadFileTool().run(paths=["README.md"])
+                                        # or print(ReadFileTool().run(paths=["README.md"]))
+                                        tool_call_pattern = r'(?:print\()?\s*(\w+)(?:Tool)?\(\)\.run\('
+                                        tool_name_match = re.search(tool_call_pattern, tool_content, re.IGNORECASE)
+                                        
+                                        if tool_name_match:
+                                            tool_name = tool_name_match.group(1)
+                                            logger.debug(f"Found tool name from backtick code: {tool_name}")
+                                            
+                                            # Extract arguments
+                                            args = {}
+                                            
+                                            # Handle paths argument
+                                            paths_pattern = r'paths=\[(.*?)\]'
+                                            paths_match = re.search(paths_pattern, tool_content)
+                                            if paths_match:
+                                                # Extract individual paths from the list
+                                                path_content = paths_match.group(1)
+                                                paths = []
+                                                # Match quoted strings
+                                                for path in re.findall(r'"([^"]+)"', path_content):
+                                                    paths.append(path)
+                                                if paths:
+                                                    args["paths"] = paths
+                                                    logger.debug(f"Extracted paths: {paths}")
+                                            
+                                            # Create synthetic function call
+                                            class SyntheticFunctionCall:
+                                                def __init__(self, name, args):
+                                                    self.name = name
+                                                    self.args = args
+                                            
+                                            chunk_function_call = SyntheticFunctionCall(tool_name, args)
+                                            logger.info(f"Extracted tool call from executable_code backtick format: {tool_name} with args {args}")
+                                            chunk_text = "" # Clear any text found
+                                            break # Prioritize this parsed call
+                                
+                                else:
+                                    # If executable_code doesn't match any tool format, treat as text
+                                    logger.warning("executable_code found but no tool format matched. Treating as text.")
+                                    try:
+                                        if hasattr(part, "text") and part.text:
+                                           chunk_text += part.text
+                                    except (ValueError, AttributeError): pass
 
-                for i in range(num_chunks):
-                    start = i * chunk_size
-                    end = min(start + chunk_size, len(text_content))
-                    text_chunk = text_content[start:end]
-                    content_chunks.append(text_chunk)
 
-                    # Create the content block delta event
-                    content_delta = {
-                        "choices": [
-                            {
-                                "delta": {
-                                    "anthropic_event": "content_block_delta",
-                                    "index": 0,
-                                    "delta": {"type": "text_delta", "text": text_chunk},
-                                },
-                                "index": 0,
-                                "finish_reason": None,
+                            # 3. Accumulate text if no function call found in this part
+                            elif not chunk_function_call:
+                                try:
+                                    if hasattr(part, "text") and part.text:
+                                        part_text = part.text
+                                        if part_text:
+                                            chunk_text += part_text
+                                            logger.debug(f"Found text in part: {part_text}")
+                                except (ValueError, AttributeError) as e:
+                                    logger.debug(f"Could not get part.text: {e}")
+                
+                # If no text found in parts, try to get from the chunk directly
+                # Only do this if we didn't already find text in parts to avoid duplication
+                if not chunk_text and not chunk_function_call:
+                    try:
+                        if hasattr(chunk, "text") and chunk.text:
+                            chunk_text = chunk.text
+                            logger.debug(f"Chunk Text (direct): '{chunk_text}'")
+                    except (ValueError, AttributeError) as e:
+                        logger.debug(f"Could not get chunk.text: {e}")
+
+                # Check for finish reason from candidate
+                if hasattr(chunk, "candidates") and chunk.candidates and hasattr(chunk.candidates[0], "finish_reason") and chunk.candidates[0].finish_reason:
+                         # Convert enum to string if needed, or handle string directly
+                        raw_reason = chunk.candidates[0].finish_reason
+                        try:
+                            if isinstance(raw_reason, enum.Enum): # Check if it's an enum
+                                chunk_finish_reason = raw_reason.name # Get the string name
+                            else:
+                                chunk_finish_reason = str(raw_reason) # Assume it might be string/int
+                            
+                            logger.debug(f"Finish reason found: {chunk_finish_reason} (Raw type: {type(raw_reason).__name__})")
+                        except Exception as e:
+                            # Fallback for any enum handling issues
+                            chunk_finish_reason = "STOP"  # Default to STOP if we can't determine
+                            logger.debug(f"Error handling finish reason, using default: {e}")
+                        is_last_chunk = True
+
+                # Get usage metrics if available (keep this from original code)
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    if hasattr(chunk.usage_metadata, "prompt_token_count"):
+                        input_tokens = chunk.usage_metadata.prompt_token_count
+                    if hasattr(chunk.usage_metadata, "candidates_token_count"):
+                        output_tokens = chunk.usage_metadata.candidates_token_count
+                    logger.debug(f"Usage: input={input_tokens}, output={output_tokens}")
+                
+                # --- End: Parsing Logic ---
+
+                # --- Start: Event Generation Logic (largely unchanged but now uses parsed chunk_function_call) ---
+                # Process function calls (now includes those parsed from executable_code)
+                if chunk_function_call:
+                    # Close text block if open
+                    if current_block_type == 'text' and text_block_started:
+                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+                        logger.debug(f"Closed text block {current_content_block_index} before tool")
+                        text_block_started = False
+                        current_block_type = None
+
+                    # Start a new tool_use block if needed
+                    if current_block_type != 'tool_use' or current_tool_name != chunk_function_call.name:
+                        current_content_block_index += 1
+                        current_block_type = 'tool_use'
+                        current_tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
+                        current_tool_name = chunk_function_call.name
+                        accumulated_tool_args = ""
+                        tool_block_data = { # payload for content_block_start
+                            'type': 'content_block_start',
+                            'index': current_content_block_index,
+                            'content_block': {
+                                'type': 'tool_use',
+                                'id': current_tool_id,
+                                'name': current_tool_name,
+                                'input': {}
                             }
-                        ],
-                        "created": int(uuid.uuid1().time // 1000),
-                        "model": original_request.model,
-                        "object": "chat.completion.chunk",
+                        }
+                        yield f"event: content_block_start\ndata: {json.dumps(tool_block_data)}\n\n"
+                        logger.debug(f"Started tool block {current_content_block_index} for {current_tool_name}")
+                        tool_blocks.append(current_content_block_index)
+
+                    # Process tool arguments
+                    if hasattr(chunk_function_call, "args") and chunk_function_call.args:
+                        # Gemini args are dicts, Anthropic expects JSON string fragments
+                        args_json_str = json.dumps(chunk_function_call.args)
+                        # Avoid sending empty "{}" args delta if that's all we got
+                        if args_json_str != "{}" and args_json_str != accumulated_tool_args:
+                            tool_delta_data = { # payload for content_block_delta
+                                'type': 'content_block_delta',
+                                'index': current_content_block_index,
+                                'delta': {'type': 'input_json_delta', 'partial_json': args_json_str}
+                            }
+                            yield f"event: content_block_delta\ndata: {json.dumps(tool_delta_data)}\n\n"
+                            logger.debug(f"Sent tool args delta: {args_json_str[:100]}...")
+                            accumulated_tool_args = args_json_str
+
+                # Process text content (only if no function call was processed in this chunk)
+                elif chunk_text:
+                    # Check for tool code pattern directly in text content
+                    tool_call_extracted = False
+                    
+                    # Check if text contains ```tool_code or some form of print(ReadFileTool)
+                    if ("```tool_code" in chunk_text or 
+                        "print(ReadFileTool" in chunk_text or 
+                        "ReadFileTool().run" in chunk_text):
+                        
+                        logger.info("Found potential tool code in text chunk - attempting to extract")
+                        
+                        import re
+                        # Try to extract from backtick format first
+                        tool_code_match = re.search(r'```tool_code\s+(.*?)```', chunk_text, re.DOTALL)
+                        
+                        if tool_code_match:
+                            # Extract code from backticks
+                            tool_content = tool_code_match.group(1).strip()
+                            logger.debug(f"Found ```tool_code content in text: {tool_content}")
+                            
+                            # Extract tool name
+                            tool_call_pattern = r'(?:print\()?\s*(\w+)(?:Tool)?\(\)\.run\('
+                            tool_name_match = re.search(tool_call_pattern, tool_content, re.IGNORECASE)
+                            
+                            if tool_name_match:
+                                tool_name = tool_name_match.group(1)
+                                args = {}
+                                
+                                # Extract paths argument
+                                paths_pattern = r'paths=\[(.*?)\]'
+                                paths_match = re.search(paths_pattern, tool_content)
+                                if paths_match:
+                                    path_content = paths_match.group(1)
+                                    paths = []
+                                    for path in re.findall(r'"([^"]+)"', path_content):
+                                        paths.append(path)
+                                    if paths:
+                                        args["paths"] = paths
+                                
+                                # Create synthetic function call
+                                class SyntheticFunctionCall:
+                                    def __init__(self, name, args):
+                                        self.name = name
+                                        self.args = args
+                                
+                                chunk_function_call = SyntheticFunctionCall(tool_name, args)
+                                logger.info(f"Extracted tool call from text backtick format: {tool_name} with args {args}")
+                                tool_call_extracted = True
+                        
+                        # If not found in backticks, try for direct print pattern 
+                        if not tool_call_extracted:
+                            # Look for print(ReadFileTool().run(paths=["README.md"]))
+                            direct_call_pattern = r'print\(\s*(\w+)(?:Tool)?\(\)\.run\((?:paths=\[(.*?)\])\)\)'
+                            direct_match = re.search(direct_call_pattern, chunk_text, re.DOTALL)
+                            
+                            if direct_match:
+                                tool_name = direct_match.group(1)
+                                path_content = direct_match.group(2)
+                                args = {}
+                                
+                                # Extract paths
+                                paths = []
+                                for path in re.findall(r'"([^"]+)"', path_content):
+                                    paths.append(path)
+                                if paths:
+                                    args["paths"] = paths
+                                
+                                # Create synthetic function call
+                                class SyntheticFunctionCall:
+                                    def __init__(self, name, args):
+                                        self.name = name
+                                        self.args = args
+                                
+                                chunk_function_call = SyntheticFunctionCall(tool_name, args)
+                                logger.info(f"Extracted tool call from direct text pattern: {tool_name} with args {args}")
+                                tool_call_extracted = True
+                    
+                    # If we extracted a tool call from text, process it as a function call
+                    if tool_call_extracted and chunk_function_call:
+                        # Close text block if open
+                        if current_block_type == 'text' and text_block_started:
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+                            logger.debug(f"Closed text block {current_content_block_index} before extracted tool")
+                            text_block_started = False
+                            current_block_type = None
+                        
+                        # Start a new tool_use block
+                        current_content_block_index += 1
+                        current_block_type = 'tool_use'
+                        current_tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
+                        current_tool_name = chunk_function_call.name
+                        accumulated_tool_args = ""
+                        
+                        tool_block_data = {
+                            'type': 'content_block_start',
+                            'index': current_content_block_index,
+                            'content_block': {
+                                'type': 'tool_use',
+                                'id': current_tool_id,
+                                'name': current_tool_name,
+                                'input': {}
+                            }
+                        }
+                        yield f"event: content_block_start\ndata: {json.dumps(tool_block_data)}\n\n"
+                        logger.debug(f"Started tool block {current_content_block_index} for extracted tool {current_tool_name}")
+                        tool_blocks.append(current_content_block_index)
+                        
+                        # Send tool arguments
+                        if hasattr(chunk_function_call, "args") and chunk_function_call.args:
+                            args_json_str = json.dumps(chunk_function_call.args)
+                            if args_json_str != "{}" and args_json_str != accumulated_tool_args:
+                                tool_delta_data = {
+                                    'type': 'content_block_delta',
+                                    'index': current_content_block_index,
+                                    'delta': {'type': 'input_json_delta', 'partial_json': args_json_str}
+                                }
+                                yield f"event: content_block_delta\ndata: {json.dumps(tool_delta_data)}\n\n"
+                                logger.debug(f"Sent tool args for extracted tool: {args_json_str[:100]}...")
+                                accumulated_tool_args = args_json_str
+                    
+                    # Process as normal text if no tool call was extracted
+                    else:
+                        # Close tool block if open
+                        if current_block_type == 'tool_use':
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+                            logger.debug(f"Closed tool block {current_content_block_index} before text")
+                            current_block_type = None
+
+                        # Ensure text block is started
+                        if not text_block_started:
+                            # If the first block wasn't text, or was closed, start a new one
+                            if current_content_block_index != 0 or current_block_type is None:
+                                 current_content_block_index += 1
+                            current_block_type = 'text'
+                            text_block_start_data = {
+                                'type': 'content_block_start',
+                                'index': current_content_block_index,
+                                'content_block': {'type': 'text', 'text': ""}
+                            }
+                            yield f"event: content_block_start\ndata: {json.dumps(text_block_start_data)}\n\n"
+                            logger.debug(f"Started/reopened text block {current_content_block_index}")
+                            text_block_started = True
+
+                        # Send text delta
+                        accumulated_text += chunk_text
+                        text_delta_data = {
+                            'type': 'content_block_delta',
+                            'index': current_content_block_index, # Use the current text block index
+                            'delta': {'type': 'text_delta', 'text': chunk_text}
+                        }
+                        yield f"event: content_block_delta\ndata: {json.dumps(text_delta_data)}\n\n"
+                        logger.debug(f"Sent text delta for block {current_content_block_index}: '{chunk_text}'")
+
+                # Process finish reason / End of stream
+                if is_last_chunk:
+                    # Close the last open block
+                    if current_block_type is not None and current_content_block_index >= 0:
+                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+                         logger.debug(f"Closed final block {current_content_block_index} (type: {current_block_type})")
+
+                    # Map finish reason
+                    anthropic_stop_reason = "end_turn" # Default
+                    if chunk_finish_reason:
+                        logger.debug(f"Mapping final finish reason: {chunk_finish_reason}")
+                        # Just check string values directly - safer than enum comparisons
+                        if chunk_finish_reason == "MAX_TOKENS":
+                            anthropic_stop_reason = "max_tokens"
+                        # If the *reason* is FUNCTION_CALL OR if we processed a function call in the *last* chunk
+                        elif chunk_finish_reason == "FUNCTION_CALL" or chunk_function_call:
+                            anthropic_stop_reason = "tool_use"
+                        elif chunk_finish_reason == "STOP":
+                            anthropic_stop_reason = "end_turn"
+                        elif chunk_finish_reason == "SAFETY":
+                            anthropic_stop_reason = "end_turn" # Or map to error?
+                        elif chunk_finish_reason == "RECITATION":
+                            anthropic_stop_reason = "end_turn" # Or map to error?
+
+                    # If we've used any tools during this stream, set the reason
+                    if len(tool_blocks) > 0:
+                        anthropic_stop_reason = "tool_use"
+                        logger.info(f"Setting final stop_reason to 'tool_use' due to tool blocks used ({len(tool_blocks)} blocks)")
+
+                    # Estimate output tokens if needed
+                    if output_tokens == 0:
+                        output_tokens = len(accumulated_text) // 4
+
+                    # Send final events
+                    message_delta_data = {
+                        'type': 'message_delta',
+                        'delta': {'stop_reason': anthropic_stop_reason, 'stop_sequence': None},
+                        'usage': {'output_tokens': output_tokens}
                     }
+                    yield f"event: message_delta\ndata: {json.dumps(message_delta_data)}\n\n"
+                    logger.debug(f"Sent final message_delta with stop_reason: {anthropic_stop_reason}")
 
-                    logger.info(f"Yielding content chunk {i+1}/{num_chunks}: '{text_chunk}'")
-                    yield f"data: {json.dumps(content_delta)}\n\n"
-                    logger.info(f"Processing chunk: {content_delta}")
+                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+                    logger.debug("Sent final message_stop")
 
-        # Calculate output tokens from the content length (rough approximation)
-        output_tokens = max(1, len(content_text) // 4)
+                    yield "data: [DONE]\n\n"
+                    logger.info("Stream completed.")
+                    return # Exit the generator
 
-        # Send content_block_stop event
-        logger.info("Sending content_block_stop event")
-        content_block_stop = {
-            "choices": [
-                {"delta": {"anthropic_event": "content_block_stop", "index": 0}, "index": 0, "finish_reason": None}
-            ],
-            "created": int(uuid.uuid1().time // 1000),
-            "model": original_request.model,
-            "object": "chat.completion.chunk",
+            except Exception as chunk_error:
+                logger.error(f"Error processing chunk: {chunk_error}", exc_info=True)
+                # Decide whether to continue or terminate stream based on error severity
+
+        # Fallback if stream ends without a finish reason (less likely with Vertex)
+        logger.warning("Stream ended without explicit finish reason.")
+        if current_block_type is not None and current_content_block_index >= 0:
+             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+        
+        # Estimate tokens if not provided
+        if output_tokens == 0:
+            output_tokens = len(accumulated_text) // 4
+        
+        # Send closing events
+        message_delta_data = {
+            'type': 'message_delta',
+            'delta': {'stop_reason': "end_turn", 'stop_sequence': None},
+            'usage': {'output_tokens': output_tokens}
         }
-        logger.info(f"Yielding content_block_stop chunk: {content_block_stop}")
-        yield f"data: {json.dumps(content_block_stop)}\n\n"
-        logger.info(f"Processing chunk: {content_block_stop}")
-
-        # Send message_delta with usage
-        logger.info("Sending message_delta event with stop_reason")
-        message_delta = {
-            "choices": [
-                {
-                    "delta": {
-                        "anthropic_event": "message_delta",
-                        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                        "usage": {"output_tokens": output_tokens},
-                    },
-                    "index": 0,
-                    "finish_reason": None,
-                }
-            ],
-            "created": int(uuid.uuid1().time // 1000),
-            "model": original_request.model,
-            "object": "chat.completion.chunk",
-        }
-        logger.info(f"Yielding message_delta chunk with {output_tokens} tokens: {message_delta}")
-        yield f"data: {json.dumps(message_delta)}\n\n"
-        logger.info(f"Processing chunk: {message_delta}")
-
-        # Send message_stop event
-        logger.info("Sending message_stop event")
-        message_stop = {
-            "choices": [{"delta": {"anthropic_event": "message_stop"}, "index": 0, "finish_reason": "stop"}],
-            "created": int(uuid.uuid1().time // 1000),
-            "model": original_request.model,
-            "object": "chat.completion.chunk",
-        }
-        logger.info(f"Yielding message_stop chunk: {message_stop}")
-        yield f"data: {json.dumps(message_stop)}\n\n"
-        logger.info(f"Processing chunk: {message_stop}")
-
-        # IMPORTANT: Send the final [DONE] marker exactly as shown here - critical for Claude client
-        logger.info("Sending [DONE] marker at end of stream - normal completion")
+        yield f"event: message_delta\ndata: {json.dumps(message_delta_data)}\n\n"
+        
+        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
         yield "data: [DONE]\n\n"
 
+    # Keep existing top-level exception handling
+    except ResponseBlockedError as rbe:
+        logger.error(f"Response blocked: {rbe}", exc_info=True)
+        # Try to send an error message in a format the client can understand
+        try:
+            # Close any open block
+            if 'current_block_type' in locals() and 'current_content_block_index' in locals():
+                if current_block_type == 'text' and text_block_started:
+                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+                elif current_block_type == 'tool_use':
+                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+            
+            error_message = {
+                'type': 'message_delta',
+                'delta': {'stop_reason': 'error', 'stop_sequence': None},
+                'usage': {'output_tokens': output_tokens}
+            }
+            yield f"event: message_delta\ndata: {json.dumps(error_message)}\n\n"
+            yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error(f"Failed to send error to client: {e}")
+            yield "data: [DONE]\n\n"
     except Exception as e:
-        # In case of any unexpected error
-        logger.error(f"Error in handle_streaming: {e}")
-        # Send [DONE] marker to gracefully close the connection
-        yield "data: [DONE]\n\n"
+        logger.error(f"Streaming error: {e}", exc_info=True)
+        try:
+            # Try to send error and close stream properly with appropriate message
+            # First, send error content block if we can
+            if 'current_content_block_index' in locals():
+                try:
+                    # If we have an open text block, add error text to it
+                    if 'text_block_started' in locals() and text_block_started:
+                        error_delta = {
+                            'type': 'content_block_delta',
+                            'index': current_content_block_index,
+                            'delta': {'type': 'text_delta', 'text': f"\n\n[Error: Processing was interrupted]"}
+                        }
+                        yield f"event: content_block_delta\ndata: {json.dumps(error_delta)}\n\n"
+                        
+                        # Close the text block
+                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_content_block_index})}\n\n"
+                except Exception:
+                    pass  # If adding error message fails, continue with stream closing
+                    
+            # Send message stop events to properly close the stream
+            yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'error', 'stop_sequence': None}})}\n\n"
+            yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception:
+            # Last resort - just send DONE marker
+            yield "data: [DONE]\n\n"
 
 
 def clean_gemini_schema(schema: Any) -> Any:
@@ -1250,32 +1381,9 @@ async def create_message(request: MessagesRequest, raw_request: Request):
         body_json = json.loads(body.decode("utf-8"))
         original_model = body_json.get("model", "unknown")
 
-        # IMPORTANT: Client protection - Claude Code sends multiple requests for different models
-        # We need to prioritize one model to avoid confusing the client
+        # Get client info for logging
         client_ip = raw_request.client.host if raw_request.client else "unknown"
-
-        # Skip processing for haiku model streams from the same client to prevent conflicts
-        if "haiku" in original_model.lower() and body_json.get("stream", False):
-            logger.info(f"⏭️ SKIPPING STREAMING REQUEST FOR HAIKU MODEL: Client={client_ip}")
-
-            # Return a simple empty response that satisfies the client without conflicting streams
-            return JSONResponse(
-                content={
-                    "id": f"msg_{uuid.uuid4()}",
-                    "model": original_model,
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": ""}],
-                    "stop_reason": "end_turn",
-                    "stop_sequence": None,
-                    "usage": {
-                        "input_tokens": 1,
-                        "output_tokens": 0,
-                    },
-                },
-                status_code=200,
-            )
-
+        
         # Get the display name for logging, just the model name without provider prefix
         display_model = original_model
         if "/" in display_model:
@@ -1288,34 +1396,6 @@ async def create_message(request: MessagesRequest, raw_request: Request):
         else:
             # Get the model name portion after the last slash if it exists
             clean_model_name = clean_model.split("/")[-1]
-
-        # IMPORTANT: Client protection - only process requests for the primary model
-        # Claude client sends multiple requests but we only need to process the main one
-        client_ip = raw_request.client.host if raw_request.client else "unknown"
-
-        # For Claude clients, only process the Sonnet model
-        # Skip processing for Haiku models from the same client
-        if "haiku" in display_model.lower() and request.stream:
-            # Instead of processing the haiku model, return an empty response
-            # This allows the client to focus on a single stream
-            logger.info(f"⏭️ SKIPPING STREAMING REQUEST FOR HAIKU MODEL: Client={client_ip}")
-
-            # Create a MessagesResponse that satisfies the client but doesn't do real work
-            empty_response = MessagesResponse(
-                id=f"msg_{uuid.uuid4()}",
-                model=request.model,
-                role="assistant",
-                content=[{"type": "text", "text": ""}],
-                stop_reason="end_turn",
-                stop_sequence=None,
-                usage=Usage(
-                    input_tokens=1,
-                    output_tokens=0,
-                ),
-            )
-
-            # Return a non-streaming response to avoid conflicts
-            return empty_response
 
         logger.info(f"📊 PROCESSING REQUEST: Model={clean_model_name}, Stream={request.stream}, Client={client_ip}")
 
@@ -1377,28 +1457,57 @@ async def create_message(request: MessagesRequest, raw_request: Request):
 
         # Handle streaming mode
         if request.stream:
-            logger.info("Using direct AI Platform integration for streaming")
-            # Get streaming response from AI Platform
+            logger.info("Using Vertex AI integration for streaming")
+            
+            # Convert Anthropic tools to Vertex AI tools if needed
+            vertex_tools = None
+            if request.tools:
+                # This would need further implementation for tool mapping
+                logger.info(f"Request includes {len(request.tools)} tools - preparing for Vertex AI")
+                # TODO: Implement tool conversion
+            
+            # Get streaming response from Vertex AI
             response_generator = await aiplatform_client.completion(
-                model_name=clean_model_name, messages=messages, system_message=system_message, stream=True
+                model_name=clean_model_name,
+                messages=messages,
+                system_message=system_message,
+                stream=True,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                stop_sequences=request.stop_sequences,
             )
 
-            # Convert to Anthropic streaming format with EXACT matching headers
-            # Claude client expects these exact headers
-            headers = {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive"}
+            # Convert to Anthropic streaming format
+            headers = {
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive"
+            }
+            
             logger.info("Returning streaming response with Anthropic-compatible headers")
-            # Make sure both Content-Type header and media_type are set to text/event-stream
             return StreamingResponse(
-                handle_streaming(response_generator, request), media_type="text/event-stream", headers=headers
+                handle_vertex_streaming(response_generator, request),
+                media_type="text/event-stream",
+                headers=headers
             )
         else:
             # For non-streaming requests
-            logger.info("Using direct AI Platform integration for completion")
+            logger.info("Using direct Vertex AI integration for completion")
             start_time = time.time()
 
-            # Get response from AI Platform
+            # Get response from Vertex AI
             response = await aiplatform_client.completion(
-                model_name=clean_model_name, messages=messages, system_message=system_message, stream=False
+                model_name=clean_model_name,
+                messages=messages,
+                system_message=system_message,
+                stream=False,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                stop_sequences=request.stop_sequences,
             )
 
             logger.debug(f"✅ RESPONSE RECEIVED: Model={clean_model_name}, Time={time.time() - start_time:.2f}s")
@@ -1408,15 +1517,59 @@ async def create_message(request: MessagesRequest, raw_request: Request):
             choices = response.get("choices", [{}])
             message = choices[0].get("message", {}) if choices else {}
             content_text = message.get("content", "")
+            tool_calls = message.get("tool_calls", [])
+            finish_reason = choices[0].get("finish_reason", "stop") if choices else "stop"
             usage_info = response.get("usage", {})
+
+            # Map OpenAI finish_reason to Anthropic stop_reason
+            anthropic_stop_reason = "end_turn"  # Default
+            if finish_reason == "length":
+                anthropic_stop_reason = "max_tokens"
+            elif finish_reason == "tool_calls":
+                anthropic_stop_reason = "tool_use"
+            
+            # Create content blocks
+            content_blocks = []
+            
+            # Add text content if present
+            if content_text:
+                content_blocks.append(ContentBlockText(type="text", text=content_text))
+            
+            # Add tool_use blocks if present and finish_reason indicates tool use
+            if tool_calls and anthropic_stop_reason == "tool_use":
+                for tool_call in tool_calls:
+                    if tool_call.get("type") == "function":
+                        function = tool_call.get("function", {})
+                        try:
+                            # Parse arguments (handle both string and dict formats)
+                            if isinstance(function.get("arguments"), str):
+                                arguments = json.loads(function.get("arguments", "{}"))
+                            else:
+                                arguments = function.get("arguments", {})
+                        except json.JSONDecodeError:
+                            # If JSON parsing fails, use as raw string
+                            arguments = {"raw_arguments": function.get("arguments", "{}")}
+                        
+                        content_blocks.append(
+                            ContentBlockToolUse(
+                                type="tool_use",
+                                id=tool_call.get("id", f"toolu_{uuid.uuid4().hex[:24]}"),
+                                name=function.get("name", "unknown_function"),
+                                input=arguments
+                            )
+                        )
+            
+            # Ensure we have at least one content block (empty text if nothing else)
+            if not content_blocks:
+                content_blocks.append(ContentBlockText(type="text", text=""))
 
             # Create Anthropic-compatible response
             anthropic_response = MessagesResponse(
                 id=response_id,
-                model=request.model,
+                model=original_model,  # Use the original model name requested
                 role="assistant",
-                content=[{"type": "text", "text": content_text}],
-                stop_reason="end_turn",
+                content=content_blocks,
+                stop_reason=anthropic_stop_reason,
                 stop_sequence=None,
                 usage=Usage(
                     input_tokens=usage_info.get("prompt_tokens", 0),
