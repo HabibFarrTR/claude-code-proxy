@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Proxy Installer
-# 
+#
 # Installs Claude Code Proxy for Thomson Reuters AI Platform integration
 # Enables Anthropic Claude CLI to use Gemini models via a local proxy server
 
@@ -666,7 +666,7 @@ setup_environment() {
             print_warning ".env.example not found or invalid. Creating default .env file."
             create_default_env
         fi
-        
+
         print_warning "Please edit $INSTALL_DIR/.env and set your configuration."
     else
         # Check if existing .env file is valid
@@ -674,7 +674,7 @@ setup_environment() {
             print_warning "Existing .env file contains invalid content. Creating new default .env file..."
             mv "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.broken"
             print_info "Backed up invalid .env to .env.broken"
-            
+
             create_default_env
             print_warning "Please edit $INSTALL_DIR/.env and set your configuration."
         else

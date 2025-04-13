@@ -34,7 +34,6 @@ import uvicorn
 import vertexai
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-
 from vertexai.generative_models import (
     FinishReason,
     GenerationConfig,
@@ -86,24 +85,24 @@ app = FastAPI(title="Anthropic to Custom Gemini Proxy (Native SDK Call)")
 async def create_message(request_data: MessagesRequest, raw_request: Request):
     """
     Process chat completion requests in Anthropic format using Vertex AI Gemini models.
-    
+
     This endpoint handles the core chat completion functionality, supporting both streaming
     and non-streaming responses. It performs multi-stage conversion between Anthropic and
     Vertex AI formats, with custom authentication and error handling.
-    
+
     Args:
         request_data (MessagesRequest): Pydantic model containing the structured request data
             including messages, system prompt, model name, and generation parameters
         raw_request (Request): FastAPI Request object providing access to the raw HTTP request,
             used for extracting additional details and headers
-    
+
     Returns:
         StreamingResponse: For streaming requests, returns SSE stream compatible with Anthropic's API
         JSONResponse: For non-streaming requests, returns a standard JSON response in Anthropic format
-        
+
     Raises:
         HTTPException: For authentication, validation, or upstream API failures with appropriate status codes
-    
+
     Note:
         This endpoint handles model mapping, temperature adjustments for tool calls, and retry logic
         for certain error conditions. It includes comprehensive logging for debugging and monitoring.
@@ -392,25 +391,25 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
 async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
     """
     Count tokens for a given message in Anthropic format using Vertex AI's native tokenizer.
-    
+
     This endpoint provides accurate token counting via the Vertex AI SDK's count_tokens method,
     ensuring consistent token counts between token estimation and actual inference. It includes
     a fallback estimation method for rare failure cases.
-    
+
     Args:
         request_data (TokenCountRequest): Pydantic model containing messages and system prompt
             to count tokens for, along with the target model name
         raw_request (Request): FastAPI Request object providing access to the raw HTTP request,
             used for extracting additional details and headers
-    
+
     Returns:
         JSONResponse: Contains TokenCountResponse with the input_tokens count, along with
             headers indicating the mapped model and request ID
-    
+
     Raises:
         HTTPException: For authentication failures or upstream API errors with appropriate
             status codes and error messages
-    
+
     Note:
         The implementation uses the same credential acquisition and message format conversion
         pipeline as the main completion endpoint to ensure consistency. In extremely rare cases
@@ -558,12 +557,12 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
 async def root():
     """
     Provide basic service information and health check.
-    
+
     This endpoint returns general information about the proxy service including:
     - Service status
     - Target Gemini model configurations
     - Library versions in use
-    
+
     Returns:
         dict: Service information dictionary with status and configuration details
     """

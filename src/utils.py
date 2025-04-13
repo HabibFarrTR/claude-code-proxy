@@ -10,6 +10,7 @@ from pathlib import Path
 
 class Colors:
     """ANSI color and formatting codes for terminal output styling."""
+
     CYAN = "\033[96m"
     BLUE = "\033[94m"
     GREEN = "\033[92m"
@@ -24,7 +25,7 @@ class Colors:
 
 class LoggerService:
     """Centralized logging service implementing a singleton pattern.
-    
+
     Provides consistent logging configuration across the application with:
     - File logging for all levels (DEBUG and up)
     - Console logging for higher levels (INFO and up)
@@ -37,7 +38,7 @@ class LoggerService:
     @classmethod
     def get_instance(cls) -> "LoggerService":
         """Get or create the singleton logger instance.
-        
+
         Returns:
             LoggerService: The singleton instance
         """
@@ -47,7 +48,7 @@ class LoggerService:
 
     def __init__(self):
         """Initialize the logger configuration.
-        
+
         Only runs once due to singleton pattern. Subsequent instantiations
         return without performing initialization again.
         """
@@ -94,7 +95,7 @@ class LoggerService:
 
     def get_logger(self) -> logging.Logger:
         """Get the configured application logger.
-        
+
         Returns:
             logging.Logger: The configured logger with file and console handlers
         """
@@ -103,7 +104,7 @@ class LoggerService:
 
 def get_logger() -> logging.Logger:
     """Get the application-wide configured logger instance.
-    
+
     Returns:
         logging.Logger: The centrally configured logger
     """
@@ -115,10 +116,10 @@ logger = get_logger()
 
 def log_request_beautifully(method, path, original_model, mapped_model, num_messages, num_tools, status_code):
     """Log API requests in a colorized, human-readable format.
-    
+
     Creates a visually distinctive terminal output for request monitoring with color-coded
     status indicators, model mapping information, and request details.
-    
+
     Args:
         method: HTTP method (GET, POST, etc.)
         path: Request endpoint path
@@ -134,7 +135,7 @@ def log_request_beautifully(method, path, original_model, mapped_model, num_mess
         mapped_display_name = mapped_model
         mapped_color = Colors.GREEN  # Green indicates target Gemini model
         mapped_display = f"{mapped_color}{mapped_display_name}{Colors.RESET}"
-        
+
         # Highlight tool presence with magenta if tools exist, dim if none
         tools_str = (
             f"{Colors.MAGENTA}{num_tools} tools{Colors.RESET}"
@@ -142,12 +143,12 @@ def log_request_beautifully(method, path, original_model, mapped_model, num_mess
             else f"{Colors.DIM}{num_tools} tools{Colors.RESET}"
         )
         messages_str = f"{Colors.BLUE}{num_messages} messages{Colors.RESET}"
-        
+
         # Visual indicator for success/failure
         status_color = Colors.GREEN if 200 <= status_code < 300 else Colors.RED
         status_symbol = "✓" if 200 <= status_code < 300 else "✗"
         status_str = f"{status_color}{status_symbol} {status_code}{Colors.RESET}"
-        
+
         log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
         model_line = f"  {original_display} → {mapped_display} ({messages_str}, {tools_str})"
         print(log_line)

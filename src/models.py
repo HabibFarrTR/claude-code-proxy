@@ -126,13 +126,13 @@ class MessagesResponse(BaseModel):
 
 def map_model_name(anthropic_model_name: str) -> str:
     """Map Anthropic model names to equivalent Gemini models.
-    
-    Translates Claude model names (haiku, sonnet, opus) to their appropriate 
+
+    Translates Claude model names (haiku, sonnet, opus) to their appropriate
     Gemini counterparts based on model capabilities and size.
-    
+
     Args:
         anthropic_model_name: The original Claude model name requested
-        
+
     Returns:
         str: The corresponding Gemini model ID to use
     """
