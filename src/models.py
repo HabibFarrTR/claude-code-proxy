@@ -1,3 +1,12 @@
+"""Pydantic models for API request/response validation.
+
+Defines data models for the proxy API, including models for:
+- Content blocks (text, images, tool use)
+- Messages
+- API requests and responses
+- Model name mapping between Claude and Gemini
+"""
+
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, field_validator
@@ -117,9 +126,19 @@ class MessagesResponse(BaseModel):
 
 
 def map_model_name(anthropic_model_name: str) -> str:
-    """Maps Anthropic model names to specific Gemini models. Returns the Gemini model ID."""
+    """Map Anthropic model names to equivalent Gemini models.
+    
+    Translates Claude model names (haiku, sonnet, opus) to their appropriate 
+    Gemini counterparts based on model capabilities and size.
+    
+    Args:
+        anthropic_model_name: The original Claude model name requested
+        
+    Returns:
+        str: The corresponding Gemini model ID to use
+    """
     original_model = anthropic_model_name
-    mapped_gemini_model = GEMINI_BIG_MODEL  # Default
+    mapped_gemini_model = GEMINI_BIG_MODEL  # Default to the larger model
 
     logger.debug(
         f"Attempting to map model: '{original_model}' -> Target Gemini BIG='{GEMINI_BIG_MODEL}', SMALL='{GEMINI_SMALL_MODEL}'"

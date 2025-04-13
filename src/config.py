@@ -1,3 +1,8 @@
+"""Configuration settings for the proxy server.
+
+Loads environment variables and defines configuration constants used throughout the application.
+"""
+
 import os
 
 from dotenv import load_dotenv
@@ -6,13 +11,14 @@ from src.utils import get_logger
 
 logger = get_logger()
 
-# Load environment variables from .env file
 load_dotenv()
 
-
+# Model configuration for mapping between Claude and Gemini models
 GEMINI_BIG_MODEL = os.environ.get("BIG_MODEL", "gemini-1.5-pro-latest")
 GEMINI_SMALL_MODEL = os.environ.get("SMALL_MODEL", "gemini-1.5-flash-latest")
 logger.info(f"Using BIG model: {GEMINI_BIG_MODEL}, SMALL model: {GEMINI_SMALL_MODEL}")
+
+# Temperature override settings for better tool calling reliability
 OVERRIDE_TEMPERATURE = os.environ.get("OVERRIDE_TEMPERATURE", "false").lower() == "true"
 if OVERRIDE_TEMPERATURE:
     TEMPERATURE_OVERRIDE = float(os.environ.get("TEMPERATURE", "0.7"))

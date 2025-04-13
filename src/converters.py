@@ -1,10 +1,23 @@
+"""Format conversion utilities between Anthropic and Vertex AI APIs.
+
+Provides conversion functions to translate between:
+- Anthropic Claude API format (requests and responses) 
+- Vertex AI Gemini API format (requests and responses)
+- Intermediate LiteLLM/OpenAI format used for simplifying conversion process
+
+Handles both streaming and non-streaming responses with special attention to:
+- Tool/function calling format differences
+- Content structure differences
+- Error handling and reporting
+"""
+
 import base64
 import json
 import time
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
 
-from vertexai.generative_models import (  # <-- Added FunctionCall
+from vertexai.generative_models import (
     Content,
     FinishReason,
     FunctionCall,
@@ -27,10 +40,19 @@ from src.utils import get_logger
 logger = get_logger()
 
 
-# This is still useful to get a standardized intermediate format (OpenAI-like)
-# before converting to the native Vertex SDK format.
 def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
-    """Converts Anthropic MessagesRequest to LiteLLM input dict (OpenAI format)."""
+    """Convert Anthropic API request to intermediate LiteLLM/OpenAI format.
+    
+    Transforms Anthropic's message-based format into an OpenAI-like format that's
+    easier to process before final conversion to Vertex AI. Handles system messages,
+    content blocks, tool calls/results, and various parameter conversions.
+    
+    Args:
+        request: The validated Anthropic API request with messages and parameters
+        
+    Returns:
+        Dict[str, Any]: Request in OpenAI-compatible format with mapped parameters
+    """
     litellm_messages = []
 
     # Handle System Prompt -> Becomes a separate parameter for Gemini SDK
@@ -201,7 +223,21 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
 
 
 def clean_gemini_schema(schema: Any) -> Any:
-    """Recursively removes fields unsupported by Gemini from a JSON schema dict."""
+    """Clean JSON schema to ensure compatibility with Gemini API requirements.
+    
+    Recursively processes a JSON schema to remove or modify fields that are
+    unsupported by Gemini's more restrictive schema validation. This includes:
+    - Removing additionalProperties fields
+    - Removing unsupported string formats
+    - Removing default values
+    - Cleaning up null values in arrays
+    
+    Args:
+        schema: The JSON schema to clean (dict, list, or primitive value)
+        
+    Returns:
+        Any: The cleaned schema compatible with Gemini's expectations
+    """
     if isinstance(schema, dict):
         # Remove fields known to cause issues with Gemini's schema validation
         schema.pop("additionalProperties", None)
@@ -234,12 +270,20 @@ def clean_gemini_schema(schema: Any) -> Any:
     return schema
 
 
-# Conversion from LiteLLM/OpenAI format to Vertex AI SDK format +++
 def convert_litellm_tools_to_vertex_tools(litellm_tools: Optional[List[Dict]]) -> Optional[List[Tool]]:
     """
-    Converts LiteLLM/OpenAI tools list (from intermediate format) to a list
-    containing a SINGLE Vertex AI SDK Tool object, which in turn contains
-    all function declarations. Returns None if no valid tools are found.
+    Convert OpenAI-format tools to Vertex AI SDK Tool objects.
+    
+    Transforms tools from the intermediate OpenAI format into Vertex AI's format.
+    Notably, while OpenAI represents each function as a separate tool, Vertex AI
+    expects a single Tool object containing multiple function declarations.
+    
+    Args:
+        litellm_tools: List of tools in OpenAI format from intermediate conversion
+        
+    Returns:
+        Optional[List[Tool]]: A list containing a single Tool with all function 
+            declarations, or None if no valid tools
     """
     if not litellm_tools:
         return None
@@ -287,9 +331,24 @@ def convert_litellm_tools_to_vertex_tools(litellm_tools: Optional[List[Dict]]) -
 
 def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> List[Content]:
     """
-    Converts LiteLLM/OpenAI message list (intermediate format) to Vertex AI SDK Content list.
-    Includes fix (v4) for creating Parts with FunctionCalls using from_dict
-    and refined merge logic (v2).
+    Convert OpenAI-format messages to Vertex AI content objects.
+    
+    Performs complex conversion from OpenAI message structure to Vertex AI Content objects.
+    Handles special cases such as:
+    - Tool calls and tool results conversion
+    - Multi-turn conversations with proper role mapping
+    - Content merging and splitting according to Vertex AI expectations
+    - Image content handling for multimodal inputs
+    
+    This function contains specialized fixes for compatibility issues between APIs,
+    particularly for function calling which requires careful handling of function call
+    creation and merging.
+    
+    Args:
+        litellm_messages: List of message objects in OpenAI format
+        
+    Returns:
+        List[Content]: Vertex AI content objects representing the conversation history
     """
     vertex_content_list: List[Content] = []
     request_id_for_logging = "conv_test"  # Placeholder for logging context
@@ -595,11 +654,22 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
     return vertex_content_list
 
 
-# Converts the *adapted* LiteLLM/OpenAI format (from Vertex response) back to Anthropic Non-Streaming Response
 def convert_litellm_to_anthropic(
     response_chunk: Union[Dict, Any], original_model_name: str
 ) -> Optional[MessagesResponse]:
-    """Converts non-streaming LiteLLM/OpenAI format response (dict or object) to Anthropic MessagesResponse."""
+    """Convert OpenAI-format response to Anthropic API response format.
+    
+    Transforms a completed (non-streaming) response from the intermediate OpenAI
+    format back to the Anthropic API response format expected by Claude clients.
+    Handles content blocks, tool calls, and finish reason mapping.
+    
+    Args:
+        response_chunk: Response in OpenAI format from the intermediate conversion
+        original_model_name: The original Claude model name requested by the client
+        
+    Returns:
+        Optional[MessagesResponse]: Response in Anthropic format, or None if conversion fails
+    """
     request_id = response_chunk.get("request_id", "unknown")  # Get request ID if passed through
     logger.info(f"[{request_id}] Converting adapted LiteLLM/OpenAI response to Anthropic MessagesResponse format.")
     try:
@@ -721,11 +791,27 @@ def convert_litellm_to_anthropic(
         )
 
 
-# Converts the *adapted* LiteLLM/OpenAI stream (from Vertex stream) to Anthropic SSE Stream
 async def convert_litellm_to_anthropic_sse(
     response_generator: AsyncGenerator[Dict[str, Any], None], request: MessagesRequest, request_id: str
 ):
-    """Converts adapted LiteLLM/OpenAI format async generator to Anthropic SSE stream."""
+    """Convert OpenAI streaming format to Anthropic Server-Sent Events (SSE) format.
+    
+    Transforms a stream of OpenAI-format chunks into the Anthropic streaming format
+    using Server-Sent Events. Handles the complex event structure required by Anthropic:
+    - message_start/stop events
+    - content_block_start/stop events
+    - content_block_delta events
+    - message_delta events with finish information
+    - ping events for connection maintenance
+    
+    Args:
+        response_generator: Async generator yielding OpenAI-format response chunks
+        request: The original MessagesRequest from the client
+        request_id: Unique identifier for logging and tracking this request
+        
+    Yields:
+        SSE-formatted text chunks following the Anthropic streaming protocol
+    """
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     # Use the original model name provided by the client for Anthropic events
     response_model_name = request.original_model_name or request.model  # Fallback to mapped ID if original is missing
@@ -1026,15 +1112,27 @@ async def convert_litellm_to_anthropic_sse(
         # yield "data: [DONE]\n\n"
 
 
-# Adapter for Vertex AI stream to LiteLLM/OpenAI stream format +++
 async def adapt_vertex_stream_to_litellm(
     vertex_stream: AsyncGenerator[GenerationResponse, None], request_id: str, model_id_for_chunk: str
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """
-    Adapts the native Vertex AI SDK stream chunks (GenerationResponse)
-    to the OpenAI streaming chunk format expected by handle_streaming.
-    Handles parts containing either text or function calls safely.
-    Injects an error message for MALFORMED_FUNCTION_CALL finish reason.
+    """Adapt Vertex AI streaming responses to OpenAI streaming format.
+    
+    Transforms the Vertex AI streaming response format to the OpenAI streaming format,
+    acting as the first conversion stage for streaming responses. Handles several
+    important operations:
+    - Extracting text content from Vertex parts
+    - Converting function calls to OpenAI tool call format
+    - Processing error conditions like malformed function calls
+    - Mapping finish reasons between API formats
+    - Managing token usage information
+    
+    Args:
+        vertex_stream: Async generator yielding Vertex AI GenerationResponse objects
+        request_id: Unique identifier for this request for logging purposes
+        model_id_for_chunk: Model ID to include in the adapted chunks
+        
+    Returns:
+        AsyncGenerator yielding OpenAI-format streaming response chunks
     """
     logger.info(f"[{request_id}] Starting Vertex AI stream adaptation...")
     current_tool_calls = {}
@@ -1294,9 +1392,21 @@ async def adapt_vertex_stream_to_litellm(
         logger.info(f"[{request_id}] Vertex AI stream adaptation finished.")
 
 
-# Conversion from Vertex AI non-streaming response to LiteLLM/OpenAI dict +++
 def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: str, request_id: str) -> Dict[str, Any]:
-    """Converts a non-streaming Vertex AI GenerationResponse to a LiteLLM/OpenAI-like dictionary."""
+    """Convert Vertex AI response to OpenAI format response.
+    
+    Transforms a completed (non-streaming) Vertex AI response to the OpenAI format,
+    acting as an intermediate format before final conversion to Anthropic format.
+    Handles text content, tool calls, finish reasons, and usage statistics.
+    
+    Args:
+        response: The Vertex AI GenerationResponse object
+        model_id: Model identifier to include in the response
+        request_id: Unique request identifier for logging
+        
+    Returns:
+        Dict[str, Any]: Response formatted in OpenAI-compatible structure
+    """
     logger.info(f"[{request_id}] Converting Vertex non-streaming response to LiteLLM/OpenAI format.")
     output_text = ""
     tool_calls = []  # List for OpenAI tool_calls structure

@@ -1,3 +1,9 @@
+"""Authentication handler for Thomson Reuters AI Platform.
+
+Provides authentication with the Thomson Reuters AI Platform to obtain
+temporary credentials for accessing Vertex AI's Gemini models.
+"""
+
 import json
 import os
 
@@ -11,16 +17,24 @@ logger = get_logger()
 
 
 class AuthenticationError(Exception):
-    """Custom exception for authentication failures."""
+    """Custom exception for authentication failures with the Thomson Reuters API."""
     pass
 
 
-# --- Custom Authentication ---
 def get_gemini_credentials():
     """
-    Authenticates with the custom endpoint and returns Vertex AI credentials.
-    Returns: tuple (project_id, location, OAuth2Credentials)
-    Raises: AuthenticationError
+    Authenticate with the Thomson Reuters endpoint and retrieve Vertex AI credentials.
+    
+    Contacts the Thomson Reuters authentication service to obtain temporary
+    credentials for accessing Vertex AI's Gemini models. The credentials are 
+    workspace-specific and model-specific.
+    
+    Returns:
+        tuple: Contains (project_id, location, OAuth2Credentials) for Vertex AI
+        
+    Raises:
+        AuthenticationError: When authentication fails due to missing environment 
+            variables, network issues, or invalid responses
     """
     workspace_id = os.getenv("WORKSPACE_ID")
     model_name_for_auth = os.getenv("GEMINI_BIG_MODEL", GEMINI_BIG_MODEL)
