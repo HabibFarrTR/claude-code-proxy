@@ -474,7 +474,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
                             # Create the FunctionCall object first
                             vertex_function_call = FunctionCall(name=func_name, args=func_args)
 
-                            # --- !!! CORE FIX APPLIED HERE (v4) !!! ---
+                            # Using from_dict to properly create function_call parts in Vertex format
                             # Create the Part using from_dict, providing the function_call structure
                             try:
                                 part_for_call = Part.from_dict(
@@ -499,7 +499,6 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
                                 current_turn_parts.append(
                                     Part.from_text(f"[ERROR: Failed to construct function_call part for {func_name}]")
                                 )
-                            # --- !!! END FIX (v4) !!! ---
                         else:
                             logger.warning(
                                 f"[{request_id_for_logging}] Skipping assistant tool call part due to missing function name: {tc}"
@@ -578,7 +577,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
                 )
                 continue
 
-            # --- Refined Merge Logic (v2 - unchanged) ---
+            # Determine if we should merge with previous content based on role and content type
             should_merge = False
             if vertex_content_list:
                 last_content = vertex_content_list[-1]
@@ -596,7 +595,6 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
                         if not is_last_content_a_tool_response_turn:
                             should_merge = True
                             logger.debug(f"[{request_id_for_logging}] Merging standard parts (non-tool-result).")
-            # --- End Refined Merge Logic (v2) ---
 
             if should_merge:
                 logger.debug(

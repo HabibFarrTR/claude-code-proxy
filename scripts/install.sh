@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Claude Proxy Installer
-# Installs claude-code-proxy without requiring the full source repository
+# 
+# Installs Claude Code Proxy for Thomson Reuters AI Platform integration
+# Enables Anthropic Claude CLI to use Gemini models via a local proxy server
 
 set -e  # Exit on error
 
@@ -79,11 +81,13 @@ parse_args() {
 }
 
 check_dependencies() {
+    # Verify that all required software is installed and meet version requirements
     print_info "Checking dependencies..."
 
     MISSING_DEPS=()
 
-    for cmd in python3 pip curl unzip; do
+    # Check for required command-line tools
+    for cmd in python3 pip curl; do
         if ! command -v $cmd &> /dev/null; then
             MISSING_DEPS+=($cmd)
         fi
@@ -95,7 +99,7 @@ check_dependencies() {
         exit 1
     fi
 
-    # Check Python version
+    # Verify Python version meets minimum requirements
     PY_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
     PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
@@ -109,24 +113,31 @@ check_dependencies() {
 }
 
 create_virtualenv() {
+    # Set up an isolated Python environment for the proxy
     print_info "Creating virtual environment in $INSTALL_DIR..."
 
     # Create installation directory if it doesn't exist
     mkdir -p "$INSTALL_DIR"
 
-    # Create virtual environment
+    # Create virtual environment using Python's built-in venv module
     python3 -m venv "$INSTALL_DIR/venv"
 
     print_success "Virtual environment created!"
 }
 
 install_dependencies() {
+    # Install Python package dependencies required by the proxy server
     print_info "Installing dependencies..."
 
-    # Activate virtual environment
+    # Activate virtual environment to ensure packages are installed locally
     source "$INSTALL_DIR/venv/bin/activate"
 
-    # Install required packages
+    # Install required packages:
+    # - fastapi/uvicorn: Web framework and ASGI server
+    # - pydantic: Data validation
+    # - python-dotenv: Environment variable management
+    # - httpx: HTTP client for API calls
+    # - vertexai/google-auth: Google Vertex AI integration
     pip install --upgrade pip
     pip install fastapi uvicorn pydantic python-dotenv httpx vertexai google-auth
 
@@ -143,32 +154,34 @@ create_directory_structure() {
 }
 
 download_core_files() {
+    # Retrieve source code files for the proxy - either from GitHub or local directory
     print_info "Downloading core files..."
 
-    # Create a temporary directory
+    # Create a temporary directory for download operations
     TMP_DIR=$(mktemp -d)
 
-    # Function to download a single file from GitHub
+    # Function to download a single file from GitHub repository
     download_file() {
         local file_path="$1"
         local target_dir="$2"
         local url="$GITHUB_REPO/raw/$VERSION/$file_path"
 
+        # Ensure target directory structure exists
         mkdir -p "$(dirname "$target_dir/$file_path")"
 
-        # Add verbose output for debugging
+        # Log the download operation
         print_info "Downloading $file_path from $url"
 
-        # Add User-Agent header to avoid getting HTML error pages
+        # Add User-Agent header to avoid GitHub restrictions
         curl -s -L -o "$target_dir/$file_path" -H "User-Agent: Mozilla/5.0" "$url"
 
-        # Check if the downloaded file looks like HTML (likely an error page)
+        # Validate downloaded content - detect HTML error pages
         if grep -q "<!DOCTYPE html>" "$target_dir/$file_path" 2>/dev/null; then
             print_warning "Warning: $file_path appears to contain HTML. Download might have failed."
 
-            # For .env.example, we'll handle it in setup_environment()
+            # Special handling for configuration templates
             if [[ "$file_path" != ".env.example" ]]; then
-                print_info "Creating empty file for $file_path"
+                print_info "Creating empty placeholder for $file_path"
                 mkdir -p "$(dirname "$target_dir/$file_path")"
                 touch "$target_dir/$file_path"
             fi
@@ -271,6 +284,22 @@ source "\$VENV/bin/activate" 2>/dev/null || {
     exit 1
 }
 
+# Template for default .env in executable
+DEFAULT_ENV_TEMPLATE_EXEC='# Thomson Reuters AIplatform Configuration
+# IMPORTANT: You must run '\''mltools-cli aws-login'\'' to set up AWS credentials before using this proxy
+
+# Required settings
+WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
+
+# Optional settings with defaults
+AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
+
+# The proxy will automatically map:
+# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
+# - claude-3-haiku → gemini-2.0-flash'
+
 case "\$1" in
     start)
         # Get port from second argument if provided
@@ -295,22 +324,7 @@ case "\$1" in
                 cp "\$INSTALL_DIR/.env.example" "\$INSTALL_DIR/.env"
             else
                 # Create a minimal .env file
-                cat > "\$INSTALL_DIR/.env" << ENVEOF
-# Thomson Reuters AIplatform Configuration
-# IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
-
-# Required settings
-WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
-
-# Optional settings with defaults
-AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-BIG_MODEL="gemini-2.5-pro-preview-03-25"
-SMALL_MODEL="gemini-2.0-flash"
-
-# The proxy will automatically map:
-# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
-# - claude-3-haiku → gemini-2.0-flash
-ENVEOF
+                echo "$DEFAULT_ENV_TEMPLATE_EXEC" > "\$INSTALL_DIR/.env"
             fi
             echo "⚠️ Please edit \$INSTALL_DIR/.env with your configuration"
         fi
@@ -396,54 +410,30 @@ ENVEOF
         fi
         ;;
     setup-env)
+        # Function to check if env file is valid
+        is_valid_env() {
+            local file=$1
+            ! grep -q "<!DOCTYPE html>" "$file" && grep -q "WORKSPACE_ID" "$file"
+        }
+
+        # Create/reset .env file with appropriate content
         if [[ ! -f "\$INSTALL_DIR/.env" ]]; then
-            # Check if .env.example exists and is valid (not HTML)
-            if [[ -f "\$INSTALL_DIR/.env.example" ]] && ! grep -q "<!DOCTYPE html>" "\$INSTALL_DIR/.env.example"; then
+            # Check if .env.example exists and is valid
+            if [[ -f "\$INSTALL_DIR/.env.example" ]] && is_valid_env "\$INSTALL_DIR/.env.example"; then
                 cp "\$INSTALL_DIR/.env.example" "\$INSTALL_DIR/.env"
                 echo "📝 Created .env file from template."
             else
                 # Create a default .env file
-                cat > "\$INSTALL_DIR/.env" << ENVEOF
-# Thomson Reuters AIplatform Configuration
-# IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
-
-# Required settings
-WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
-
-# Optional settings with defaults
-AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-BIG_MODEL="gemini-2.5-pro-preview-03-25"
-SMALL_MODEL="gemini-2.0-flash"
-
-# The proxy will automatically map:
-# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
-# - claude-3-haiku → gemini-2.0-flash
-ENVEOF
+                echo "$DEFAULT_ENV_TEMPLATE_EXEC" > "\$INSTALL_DIR/.env"
                 echo "📝 Created default .env file."
             fi
             echo "⚠️ Please edit \$INSTALL_DIR/.env and set your configuration."
         else
-            # Check if existing .env file is valid or is HTML
-            if grep -q "<!DOCTYPE html>" "\$INSTALL_DIR/.env"; then
-                echo "⚠️ Existing .env file contains HTML. Creating new one..."
+            # Check if existing .env file is valid
+            if ! is_valid_env "\$INSTALL_DIR/.env"; then
+                echo "⚠️ Existing .env file contains invalid content. Creating new one..."
                 mv "\$INSTALL_DIR/.env" "\$INSTALL_DIR/.env.broken"
-                # Create a default .env file
-                cat > "\$INSTALL_DIR/.env" << ENVEOF
-# Thomson Reuters AIplatform Configuration
-# IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
-
-# Required settings
-WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
-
-# Optional settings with defaults
-AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-BIG_MODEL="gemini-2.5-pro-preview-03-25"
-SMALL_MODEL="gemini-2.0-flash"
-
-# The proxy will automatically map:
-# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
-# - claude-3-haiku → gemini-2.0-flash
-ENVEOF
+                echo "$DEFAULT_ENV_TEMPLATE_EXEC" > "\$INSTALL_DIR/.env"
                 echo "📝 Created new .env file. Old file saved as .env.broken"
                 echo "⚠️ Please edit \$INSTALL_DIR/.env and set your configuration."
             else
@@ -633,95 +623,59 @@ EOF
     print_success "Claude wrapper created: $BIN_DIR/claudex"
 }
 
+# Template for default .env file
+DEFAULT_ENV_TEMPLATE='# Thomson Reuters AIplatform Configuration
+# IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
+
+# Required settings
+WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
+
+# Optional settings with defaults
+AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
+BIG_MODEL="gemini-2.5-pro-preview-03-25"
+SMALL_MODEL="gemini-2.0-flash"
+
+# The proxy will automatically map:
+# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
+# - claude-3-haiku → gemini-2.0-flash'
+
 setup_environment() {
+    # Set up configuration environment for the proxy
     print_info "Setting up environment..."
+
+    # Function to create a default .env file
+    create_default_env() {
+        print_info "Creating default .env file..."
+        echo "$DEFAULT_ENV_TEMPLATE" > "$INSTALL_DIR/.env"
+    }
+
+    # Function to check if an env file is valid
+    is_valid_env_file() {
+        local file="$1"
+        ! grep -q "<!DOCTYPE html>" "$file" && grep -q "WORKSPACE_ID" "$file"
+    }
 
     # Create initial .env file if it doesn't exist
     if [[ ! -f "$INSTALL_DIR/.env" ]]; then
-        # First check if .env.example exists
-        if [[ -f "$INSTALL_DIR/.env.example" ]]; then
-            # Validate .env.example - check if it contains HTML or other invalid content
-            if grep -q "<!DOCTYPE html>" "$INSTALL_DIR/.env.example" || \
-               grep -q "<html" "$INSTALL_DIR/.env.example" || \
-               ! grep -q "WORKSPACE_ID" "$INSTALL_DIR/.env.example"; then
-                print_warning "Downloaded .env.example contains invalid content. Creating default .env file instead."
-                CREATE_DEFAULT=true
-            else
-                cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
-                print_info "Created .env file from template."
-                CREATE_DEFAULT=false
-            fi
+        # First check if .env.example exists and is valid
+        if [[ -f "$INSTALL_DIR/.env.example" ]] && is_valid_env_file "$INSTALL_DIR/.env.example"; then
+            cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
+            print_info "Created .env file from template."
         else
-            print_warning ".env.example not found. Creating default .env file."
-            CREATE_DEFAULT=true
+            # No valid template found, create default
+            print_warning ".env.example not found or invalid. Creating default .env file."
+            create_default_env
         fi
-
-        # Create a default .env file if needed
-        if [[ "$CREATE_DEFAULT" == "true" ]]; then
-            print_info "Creating default .env file..."
-            cat > "$INSTALL_DIR/.env" << EOF
-# Thomson Reuters AIplatform Configuration
-# IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
-
-# Required settings
-WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
-
-# Optional settings with defaults
-AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-BIG_MODEL="gemini-2.5-pro-preview-03-25"
-SMALL_MODEL="gemini-2.0-flash"
-# The proxy will automatically map:
-# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
-# - claude-3-haiku → gemini-2.0-flash
-EOF
-        fi
-
-        # Validate the final .env file
-        if grep -q "<!DOCTYPE html>" "$INSTALL_DIR/.env" || \
-           ! grep -q "WORKSPACE_ID" "$INSTALL_DIR/.env"; then
-            print_error "Failed to create a valid .env file. Please create it manually."
-            cat > "$INSTALL_DIR/.env" << EOF
-# Thomson Reuters AIplatform Configuration
-# IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
-
-# Required settings
-WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
-
-# Optional settings with defaults
-BIG_MODEL="gemini-2.5-pro-preview-03-25"
-SMALL_MODEL="gemini-2.0-flash"
-
-# The proxy will automatically map:
-# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
-# - claude-3-haiku → gemini-2.0-flash
-EOF
-        fi
-
+        
         print_warning "Please edit $INSTALL_DIR/.env and set your configuration."
     else
-        # Check if existing .env file is valid (not HTML)
-        if grep -q "<!DOCTYPE html>" "$INSTALL_DIR/.env" || \
-           ! grep -q "WORKSPACE_ID" "$INSTALL_DIR/.env"; then
+        # Check if existing .env file is valid
+        if ! is_valid_env_file "$INSTALL_DIR/.env"; then
             print_warning "Existing .env file contains invalid content. Creating new default .env file..."
             mv "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.broken"
             print_info "Backed up invalid .env to .env.broken"
-
-            cat > "$INSTALL_DIR/.env" << EOF
-# Thomson Reuters AIplatform Configuration
-# IMPORTANT: You must run 'mltools-cli aws-login' to set up AWS credentials before using this proxy
-
-# Required settings
-WORKSPACE_ID="your-workspace-id" # Replace with your actual workspace ID
-
-# Optional settings with defaults
-AUTH_URL="https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token"
-BIG_MODEL="gemini-2.5-pro-preview-03-25"
-SMALL_MODEL="gemini-2.0-flash"
-
-# The proxy will automatically map:
-# - claude-3-sonnet and claude-3-opus → gemini-2.5-pro-preview-03-25
-# - claude-3-haiku → gemini-2.0-flash
-EOF
+            
+            create_default_env
             print_warning "Please edit $INSTALL_DIR/.env and set your configuration."
         else
             print_info ".env file already exists and appears valid."
@@ -757,17 +711,18 @@ print_next_steps() {
 
 # Main installation process
 main() {
+    # Execute installation steps in sequence with proper error handling
     print_banner
-    parse_args "$@"
-    check_dependencies
-    create_virtualenv
-    install_dependencies
-    create_directory_structure
-    download_core_files
-    create_executable
-    create_claude_wrapper
-    setup_environment
-    print_next_steps
+    parse_args "$@"               # Process command-line arguments
+    check_dependencies            # Verify required software is available
+    create_virtualenv             # Set up isolated Python environment
+    install_dependencies          # Install Python package dependencies
+    create_directory_structure    # Create required directories
+    download_core_files           # Get proxy source code files
+    create_executable             # Create the proxy server launcher
+    create_claude_wrapper         # Create convenience wrapper for Claude
+    setup_environment             # Configure environment variables
+    print_next_steps              # Show post-installation guidance
 }
 
 # Execute main function

@@ -35,7 +35,6 @@ import vertexai
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# Import specific types from vertexai for clarity in conversion/auth
 from vertexai.generative_models import (
     FinishReason,
     GenerationConfig,
@@ -65,10 +64,9 @@ from src.utils import Colors, get_logger, log_request_beautifully
 logger = get_logger()
 
 
-# Configure LiteLLM logging (optional: reduce verbosity)
-# litellm.set_verbose=False
-litellm.success_callback = []  # Disable default success logs
-litellm.failure_callback = []  # Disable default failure logs
+# Disable LiteLLM's default logging behavior
+litellm.success_callback = []
+litellm.failure_callback = []
 
 # Configure uvicorn and other libraries to be quieter
 logging.getLogger("uvicorn").setLevel(logging.WARNING)
@@ -81,11 +79,9 @@ logging.getLogger("google.api_core.bidi").setLevel(logging.WARNING)
 logging.getLogger("google.cloud.aiplatform").setLevel(logging.WARNING)  # Quieten Vertex SDK logs if needed
 
 
-# --- FastAPI App Initialization ---
 app = FastAPI(title="Anthropic to Custom Gemini Proxy (Native SDK Call)")
 
 
-# --- API Endpoints ---
 @app.post("/v1/messages", response_model=None)  # response_model=None for StreamingResponse
 async def create_message(request_data: MessagesRequest, raw_request: Request):
     """
@@ -392,7 +388,6 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
         raise HTTPException(status_code=500, detail=f"Internal Server Error: [{request_id}] {str(e)}")
 
 
-# --- Token Counting Endpoint (Using Native SDK) ---
 @app.post("/v1/messages/count_tokens", response_model=TokenCountResponse)
 async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
     """
@@ -559,7 +554,6 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
         logger.info(f"[{request_id}] Token count request completed in {processing_time:.3f}s")
 
 
-# --- Root Endpoint ---
 @app.get("/", include_in_schema=False)
 async def root():
     """
@@ -582,7 +576,6 @@ async def root():
     }
 
 
-# --- Middleware & Exception Handlers ---
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     start_time = time.time()
@@ -653,12 +646,10 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 
-# --- Server Startup ---
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8082))
     host = os.getenv("HOST", "0.0.0.0")
     log_level = os.getenv("LOG_LEVEL", "info").lower()
-    # Simple reload detection based on env var or argument
     reload_flag = "--reload" in sys.argv or os.getenv("UVICORN_RELOAD", "false").lower() == "true"
 
     print("--- Starting Anthropic Proxy (Native Vertex SDK) ---")
@@ -666,7 +657,6 @@ if __name__ == "__main__":
     print(f" Log Level:    {log_level}")
     print(f" Auto-Reload:  {reload_flag}")
     print(f" Target Models: BIG='{GEMINI_BIG_MODEL}', SMALL='{GEMINI_SMALL_MODEL}'")
-    # Print configured override temperature ***
     print(f" Tool Temp Override: {TOOL_CALL_TEMPERATURE_OVERRIDE}")
     print(f" LiteLLM Ver:  {getattr(litellm, '__version__', 'unknown')}")
     print(f" VertexAI Ver: {getattr(vertexai, '__version__', 'unknown')}")

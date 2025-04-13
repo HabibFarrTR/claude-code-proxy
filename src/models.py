@@ -47,7 +47,6 @@ class ContentBlockToolResult(BaseModel):
     is_error: Optional[bool] = False
 
 
-# Use Field alias for Pydantic v2 compatibility if needed, though Union should work
 ContentBlock = Union[ContentBlockText, ContentBlockImage, ContentBlockToolUse, ContentBlockToolResult]
 
 
