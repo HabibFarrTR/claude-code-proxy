@@ -37,7 +37,8 @@ A specialized, modular proxy server that lets you use Anthropic clients with Tho
    **AIplatform Configuration (Thomson Reuters):**
    *   `WORKSPACE_ID`: Your Thomson Reuters AIplatform workspace ID (REQUIRED).
    *   `AUTH_URL`: Authentication URL for Thomson Reuters AIplatform (default: "https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token").
-   *   `MODEL_NAME`: The model name to use with AIplatform (default: "gemini-2.5-pro-preview-03-25").
+   *   `BIG_MODEL`: The high-capability model to use (default: "gemini-2.5-pro-preview-03-25").
+   *   `SMALL_MODEL`: The faster, lighter model to use (default: "gemini-2.0-flash").
 
    **IMPORTANT**: You must run `mltools-cli aws-login` before starting the server to set up AWS credentials.
 
@@ -101,11 +102,10 @@ We provide two scripts to make using Claude Code with the proxy easier:
 
 The proxy automatically maps Claude models to AIplatform models:
 
-| Claude Model | AIplatform Mapping |
-|--------------|-------------------|
-| claude-3-haiku | aiplatform/gemini-2.0-flash |
-| claude-3-sonnet | aiplatform/gemini-2.5-pro-preview-03-25 |
-| claude-3-opus | aiplatform/gemini-2.5-pro-preview-03-25 |
+| Claude Model      | AIplatform Mapping |
+|-------------------|-------------------|
+| claude-3.5-haiku  | aiplatform/gemini-2.0-flash |
+| claude-3.7-sonnet | aiplatform/gemini-2.5-pro-preview-03-25 |
 
 ### Supported Models
 
@@ -120,8 +120,8 @@ The proxy automatically adds the appropriate prefix to model names:
 - Claude models (haiku, sonnet, opus) are mapped to the appropriate AIplatform model
 
 For example:
-- `claude-3-sonnet-20240229` becomes `aiplatform/gemini-2.5-pro-preview-03-25`
-- `claude-3-haiku-20240307` becomes `aiplatform/gemini-2.0-flash`
+- `claude-3.7-sonnet` becomes `aiplatform/gemini-2.5-pro-preview-03-25`
+- `claude-3.5-haiku` becomes `aiplatform/gemini-2.0-flash`
 - Direct use: `aiplatform/gemini-2.5-pro-preview-03-25`
 
 ## How It Works 🧩
@@ -143,13 +143,12 @@ The proxy uses a modular architecture for maintainability and extensibility:
 
 | Module | Purpose |
 |--------|---------|
-| `server.py` | FastAPI endpoints and routing |
-| `models.py` | Pydantic data models for validation |
-| `api.py` | AIplatform client and request handling |
-| `utils.py` | Helper functions and utilities |
-| `converters.py` | Format conversion between APIs |
-| `streaming.py` | Streaming response handling |
-| `authenticator.py` | Thomson Reuters authentication |
+| `server.py` | FastAPI application with endpoints for chat completions and token counting |
+| `models.py` | Pydantic data models for request/response validation and model mapping |
+| `utils.py` | Logging configuration, color formatting, and request visualization |
+| `config.py` | Environment variables and configuration constants |
+| `authenticator.py` | Thomson Reuters AI Platform authentication |
+| `converters.py` | Format conversion utilities between Anthropic and Vertex AI APIs |
 
 ## Testing 🧪
 

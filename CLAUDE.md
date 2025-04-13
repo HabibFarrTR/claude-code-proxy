@@ -6,21 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a specialized proxy server that allows Claude clients to interact with Thomson Reuters AI Platform's Vertex AI models. It provides a mapping from Anthropic Claude API to Vertex AI, enabling Claude Code clients to use AI Platform models without modification.
 
 ## Key Files
-- `src/server.py`: Main server with API endpoints
+- `src/server.py`: Main server with API endpoints and request handling
 - `src/models.py`: Pydantic models for API requests/responses
-- `src/api.py`: AI Platform client for Vertex AI integration
-- `src/utils.py`: Utility functions for model mapping and formatting
-- `src/streaming.py`: Handler for streaming responses
+- `src/utils.py`: Utility functions for logging and formatting
+- `src/config.py`: Configuration settings and environment variables
 - `src/authenticator.py`: Handles authentication with Thomson Reuters AI Platform
-- `src/converters.py`: Format conversion between Anthropic and Vertex AI
+- `src/converters.py`: Format conversion between Anthropic and Vertex AI APIs
 - `tests/test_server.py`: Tests for AI Platform integration
 
 ## Module Structure
-- `server.py`: API endpoints and FastAPI setup
-- `models.py`: All Pydantic models for request/response validation
-- `api.py`: AIplatformClient for direct Vertex AI integration and format conversion
-- `utils.py`: Helper functions for model mapping, request processing, and logging
-- `streaming.py`: Streaming response handler with Anthropic SSE compatibility
+- `server.py`: FastAPI application with endpoints for chat completions and token counting
+- `models.py`: Pydantic data models for request/response validation and model mapping
+- `utils.py`: Logging configuration, color formatting, and request visualization
+- `config.py`: Environment variables and configuration constants
 - `authenticator.py`: Thomson Reuters AI Platform authentication
 - `converters.py`: Format conversion utilities for Anthropic/Vertex compatibility
 
@@ -36,8 +34,8 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - Uses OAuth2Credentials from a Thomson Reuters token
 - Directly integrates with Vertex AI
 - Maps Claude model names to AI Platform models automatically:
-  - claude-3-haiku → gemini-2.0-flash
-  - claude-3-sonnet/opus → gemini-2.5-pro-preview-03-25
+  - claude-3.5-haiku → gemini-2.0-flash
+  - claude-3.7-sonnet → gemini-2.5-pro-preview-03-25
 
 ## Code Style Guidelines
 - Imports: Group standard lib, third-party, and local imports, sorted alphabetically
@@ -46,5 +44,12 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - Naming: Use snake_case for variables/functions and PascalCase for classes
 - Error handling: Use try/except blocks with specific exceptions and meaningful error messages
 - Logging: Use the built-in logging module with appropriate log levels
-- Documentation: Use docstrings for functions, classes, and modules
+- Documentation: Use docstrings for modules, classes, and functions in Google style format
+- Comments: Focus on explaining "why" not "what" and avoid trivial comments
 - API design: Follow RESTful principles for endpoints with proper validation
+
+## Known Limitations
+- Tool Calling Differences: Gemini models don't support batch tool operations, unlike Claude.
+- Function Call Formats: Some complex tool calls may require format adjustments.
+- Complex Workflows: Multi-turn tool-using conversations may require special handling.
+- System Instructions: There are differences in how system instructions are processed between APIs.
