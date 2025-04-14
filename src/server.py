@@ -46,6 +46,7 @@ from src.config import (
     GEMINI_BIG_MODEL,
     GEMINI_SMALL_MODEL,
     OVERRIDE_TEMPERATURE,
+    TEMPERATURE_OVERRIDE,
     TOOL_CALL_TEMPERATURE_OVERRIDE,
 )
 from src.converters import (
@@ -182,14 +183,14 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             else:
                 if effective_temperature is None:
                     # Override temperature if no tools and no temp was provided
-                    effective_temperature = TOOL_CALL_TEMPERATURE_OVERRIDE
+                    effective_temperature = TEMPERATURE_OVERRIDE
                     logger.info(
-                        f"[{request_id}] No tools present. Defaulting temperature to configured override: {TOOL_CALL_TEMPERATURE_OVERRIDE}"
+                        f"[{request_id}] No tools present. Defaulting temperature to configured override: {TEMPERATURE_OVERRIDE}"
                     )
-                elif effective_temperature > TOOL_CALL_TEMPERATURE_OVERRIDE:
-                    effective_temperature = TOOL_CALL_TEMPERATURE_OVERRIDE
+                elif effective_temperature > TEMPERATURE_OVERRIDE:
+                    effective_temperature = TEMPERATURE_OVERRIDE
                     logger.info(
-                        f"[{request_id}] No tools present. Overriding requested temperature {effective_temperature} to configured override: {TOOL_CALL_TEMPERATURE_OVERRIDE}"
+                        f"[{request_id}] No tools present. Overriding requested temperature {effective_temperature} to configured override: {TEMPERATURE_OVERRIDE}"
                     )
 
         generation_config = GenerationConfig(

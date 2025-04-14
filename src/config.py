@@ -20,7 +20,8 @@ logger.info(f"Using BIG model: {GEMINI_BIG_MODEL}, SMALL model: {GEMINI_SMALL_MO
 
 # Temperature override settings for better tool calling reliability
 OVERRIDE_TEMPERATURE = os.environ.get("OVERRIDE_TEMPERATURE", "false").lower() == "true"
+TEMPERATURE_OVERRIDE = float(os.environ.get("TEMPERATURE", "0.7"))
+TOOL_CALL_TEMPERATURE_OVERRIDE = float(os.environ.get("TOOL_CALL_TEMPERATURE", "0.5"))
+
 if OVERRIDE_TEMPERATURE:
-    TEMPERATURE_OVERRIDE = float(os.environ.get("TEMPERATURE", "0.7"))
-    TOOL_CALL_TEMPERATURE_OVERRIDE = float(os.environ.get("TOOL_CALL_TEMPERATURE", "0.5"))
     logger.info(f"Temperature overrides enabled: {TEMPERATURE_OVERRIDE} (tool call: {TOOL_CALL_TEMPERATURE_OVERRIDE})")
