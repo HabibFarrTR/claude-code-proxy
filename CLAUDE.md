@@ -48,8 +48,45 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - Comments: Focus on explaining "why" not "what" and avoid trivial comments
 - API design: Follow RESTful principles for endpoints with proper validation
 
-## Known Limitations
-- Tool Calling Differences: Gemini models don't support batch tool operations, unlike Claude.
-- Function Call Formats: Some complex tool calls may require format adjustments.
-- Complex Workflows: Multi-turn tool-using conversations may require special handling.
-- System Instructions: There are differences in how system instructions are processed between APIs.
+## Known Limitations 🚫
+
+While this proxy enables using Claude Code with Thomson Reuters AI Platform's Gemini models, several significant limitations exist,
+particularly impacting tool usage reliability:
+
+### Tool Usage Limitations
+
+1.  **Incorrect Schema Cleaning:** The `src/converters.py:clean_gemini_schema` function aggressively removes potentially valid and necessary
+ schema information (e.g., `enum`, specific `format` types) required by the Gemini API. This is a **primary suspect** for causing
+`MALFORMED_FUNCTION_CALL` errors and incorrect tool behavior. *(See Task 2)*
+2.  **Missing `tool_config` Mapping:** Anthropic's `tool_choice` parameter (e.g., forcing a specific tool or `any` tool) is not correctly
+translated into Gemini's required `tool_config` modes (`ANY`/`NONE`). The proxy likely defaults to `AUTO`, potentially ignoring the
+requested tool choice behavior. *(See Task 3)*
+3.  **Fragile History/Stream Conversion:** The logic in `src/converters.py` for converting tool calls, arguments, and results within the
+conversation history and during streaming is complex and prone to errors. This can lead to corrupted state being sent to Gemini or malformed
+ `tool_use` blocks being sent to the client. *(See Task 6 & 7)*
+4.  **No Batch Tool Support (Gemini Limitation):** Gemini models do not support executing multiple tool calls in parallel within a single
+turn, unlike Claude. The proxy does not serialize these, so client attempts to use batch operations (like `BatchTool`) will fail.
+
+### Performance and Stability
+
+1.  **Per-Request Auth/Initialization:** The server currently performs authentication and Vertex AI SDK initialization for every incoming
+request (`src/server.py`). This adds significant latency and potential instability under load. *(See Task 1)*
+
+### Other Issues
+
+1.  **Minor Inconsistencies:** Issues like inconsistent request ID handling and potentially inaccurate model name mapping exist but are less
+ critical than the tool usage problems. *(See Task 4 & 8)*
+2. Add a New Section: "Current Development Focus"
+
+## Current Development Focus
+
+Efforts are underway to address the known limitations, particularly focusing on improving tool usage reliability and overall robustness. Key
+ areas include:
+
+*   Correcting tool schema handling (`clean_gemini_schema`).
+*   Implementing Gemini's `tool_config` modes based on Anthropic's `tool_choice`.
+*   Refactoring authentication/SDK initialization for performance and stability.
+*   Improving the robustness of conversion logic (history/streaming) and error handling.
+
+When working on the codebase, please prioritize changes aligning with these improvement goals (referenced by Task numbers in "Known
+Limitations").
