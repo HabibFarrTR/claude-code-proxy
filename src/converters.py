@@ -1260,16 +1260,17 @@ async def adapt_vertex_stream_to_litellm(
                 # (It's possible to get content chunks *before* the final error chunk)
                 if not malformed_call_detected and candidate.content and candidate.content.parts:
                     for part_index, part in enumerate(candidate.content.parts):
-                        # --- Safely check for text or function_call ---
                         try:
-                            # Attempt to access text. If it exists, process it.
-                            current_text = part.text
-                            delta_content = current_text
-                            logger.debug(f"[{request_id}] Vertex text delta: '{delta_content[:50]}...'")
-                        except AttributeError:
-                            # .text failed, so it's not a simple text part.
-                            # Now check if it's a function call part.
-                            try:
+                            # --- More safely check for text or function_call ---
+                            # First check if the part has a text attribute using hasattr
+                            if hasattr(part, "text") and part.text is not None:
+                                # It has a text field, process it
+                                current_text = part.text
+                                delta_content = current_text
+                                logger.debug(f"[{request_id}] Vertex text delta: '{delta_content[:50]}...'")
+                            # If no text, check if it has a function_call attribute
+                            elif hasattr(part, "function_call") and part.function_call is not None:
+                                # It has a function_call field, process it
                                 current_function_call = part.function_call
                                 # Process the function call
                                 tool_call_emitted_in_stream = True  # Set the flag
@@ -1302,16 +1303,10 @@ async def adapt_vertex_stream_to_litellm(
                                     f"[{request_id}] Vertex tool call delta: index={openai_tool_index_counter}, id={tool_call_id}, name={fc.name}, args='{args_str[:50]}...'"
                                 )
                                 openai_tool_index_counter += 1
-                            except AttributeError:
-                                # .function_call also failed. Log an unknown part type.
+                            else:
+                                # Neither text nor function_call found. Log an unknown part type.
                                 logger.warning(
                                     f"[{request_id}] Unknown or unexpected part type encountered in Vertex stream chunk (not text or function_call): {smart_format_proto_str(part)}"
-                                )
-                            except Exception as e:
-                                # Catch any other unexpected error during part processing
-                                logger.error(
-                                    f"[{request_id}] Unexpected error processing function call part {part_index}: {e}",
-                                    exc_info=True,
                                 )
                         except Exception as e:
                             # Catch any other unexpected error during part processing
@@ -1506,9 +1501,10 @@ def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: s
         if candidate.content and candidate.content.parts:
             openai_tool_index_counter = 0
             for part in candidate.content.parts:
-                if part.text:
+                # More safely check for text presence
+                if hasattr(part, "text") and part.text:
                     output_text += part.text  # Concatenate text parts
-                elif part.function_call:
+                elif hasattr(part, "function_call") and part.function_call:
                     has_function_call = True  # Mark that a tool call was found
                     fc = part.function_call
                     tool_call_id = f"toolu_{uuid.uuid4().hex[:12]}"  # Generate ID
@@ -1569,12 +1565,18 @@ def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: s
     if output_text:
         message_content["content"] = output_text
     else:
-        message_content["content"] = None
+        # For responses with only tool calls, we ALWAYS need to provide an empty string
+        # instead of null to ensure compatibility with clients expecting text content
+        message_content["content"] = ""  # Always provide empty string, never null
+        logger.debug(f"[{request_id}] No text content found, setting content to empty string for compatibility")
+
     if tool_calls:
         message_content["tool_calls"] = tool_calls
-    if message_content["content"] is None and not message_content.get("tool_calls"):
+        logger.debug(f"[{request_id}] Adding {len(tool_calls)} tool_calls to message content")
+
+    if not output_text and not tool_calls:
         logger.warning(
-            f"[{request_id}] Non-streaming response has no text and no tool calls. Message content set to null."
+            f"[{request_id}] Non-streaming response has no text and no tool calls. Message content set to empty string."
         )
 
     # --- Construct the Final LiteLLM/OpenAI-like Response Dict ---

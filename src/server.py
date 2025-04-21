@@ -34,6 +34,13 @@ import uvicorn
 import vertexai
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 from vertexai.generative_models import (
     FinishReason,
     GenerationConfig,
@@ -340,85 +347,121 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             logger.info(
                 f"[{request_id}] Calling Vertex AI generate_content_async (non-streaming) with effective_temperature={effective_temperature}"
             )  # Log temp used
-            # *** Using the retry logic proposed previously for non-streaming ***
-            max_retries = 1
-            retries = 0
-            vertex_response = None
-            last_error = None
 
-            while retries <= max_retries:
-                logger.info(f"[{request_id}] Non-streaming attempt {retries + 1}/{max_retries + 1}")
+            logger.debug(f"[{request_id}] History Length: {len(vertex_history)}")
+            logger.debug(f"[{request_id}] Generation Config: {smart_format_proto_str(generation_config)}")
+            logger.debug(f"[{request_id}] Tools: {smart_format_proto_str(vertex_tools)}")
+            logger.debug(f"[{request_id}] Tool Config: {smart_format_proto_str(vertex_tool_config)}")
 
-                logger.debug(f"[{request_id}] History Length: {len(vertex_history)}")
-                logger.debug(f"[{request_id}] Generation Config: {smart_format_proto_str(generation_config)}")
-                logger.debug(f"[{request_id}] Tools: {smart_format_proto_str(vertex_tools)}")
-                logger.debug(f"[{request_id}] Tool Config: {smart_format_proto_str(vertex_tool_config)}")
+            # Define retry decorator for transient errors
+            @retry(
+                retry=(
+                    retry_if_exception_type(google.api_core.exceptions.ServiceUnavailable)
+                    | retry_if_exception_type(google.api_core.exceptions.DeadlineExceeded)
+                    | retry_if_exception_type(google.api_core.exceptions.ResourceExhausted)
+                    | retry_if_exception_type(google.api_core.exceptions.InternalServerError)
+                    | retry_if_exception_type(google.api_core.exceptions.GatewayTimeout)
+                ),
+                wait=wait_exponential(multiplier=1, min=2, max=10),  # Start with 2s, max 10s
+                stop=stop_after_attempt(3),  # Max 3 attempts (initial + 2 retries)
+                reraise=True,
+            )
+            async def generate_with_retry():
+                """Call the Vertex AI model with retries for transient errors."""
+                attempt = 0
 
-                try:
-                    vertex_response = await model.generate_content_async(
+                # Define a local retry for MALFORMED_FUNCTION_CALL which isn't a proper exception
+                async def attempt_generate():
+                    nonlocal attempt
+                    attempt += 1
+                    logger.info(f"[{request_id}] Non-streaming attempt {attempt}")
+
+                    response = await model.generate_content_async(
                         contents=vertex_history,
-                        generation_config=generation_config,  # Pass the potentially modified config
+                        generation_config=generation_config,
                         safety_settings=safety_settings,
                         tools=vertex_tools,
                         tool_config=vertex_tool_config,
                         stream=False,
                     )
+
                     logger.debug(
-                        f"[{request_id}] Raw Vertex AI Non-Streaming Response (Attempt {retries + 1}): "
-                        f"{smart_format_proto_str(vertex_response)}"
+                        f"[{request_id}] Raw Vertex AI Non-Streaming Response (Attempt {attempt}): "
+                        f"{smart_format_proto_str(response)}"
                     )
 
-                    is_malformed = False
-                    if vertex_response.candidates:
-                        candidate = vertex_response.candidates[0]
-                        if candidate.finish_reason == FinishReason.MALFORMED_FUNCTION_CALL:
-                            is_malformed = True
-                            last_error = f"Malformed function call detected by upstream API. Message: {getattr(candidate, 'finish_message', 'N/A')}"
-                            logger.warning(f"[{request_id}] {last_error} (Attempt {retries + 1})")
+                    # Check for malformed function call which is a special case
+                    if (
+                        response.candidates
+                        and response.candidates[0].finish_reason == FinishReason.MALFORMED_FUNCTION_CALL
+                    ):
+                        finish_message = getattr(response.candidates[0], "finish_message", "N/A")
+                        logger.warning(
+                            f"[{request_id}] Malformed function call detected by upstream API. "
+                            f"Message: {finish_message} (Attempt {attempt})"
+                        )
 
-                    if is_malformed and retries < max_retries:
-                        retries += 1
+                        # On final attempt, return anyway to let caller decide what to do
+                        if attempt >= 2:  # Only retry once for malformed function calls
+                            return response
+
+                        # Otherwise, retry with a delay
                         logger.info(f"[{request_id}] Retrying non-streaming call due to malformed function call...")
-                        await asyncio.sleep(1)
-                        continue
-                    else:
-                        break  # Exit loop on success, non-retryable error, or max retries reached
+                        await asyncio.sleep(2)  # Use a fixed delay for this specific case
+                        return await attempt_generate()  # Recursive retry
 
-                except google.api_core.exceptions.InvalidArgument as e:
-                    last_error = e
-                    logger.error(
-                        f"[{request_id}] Vertex API Invalid Argument Error (Non-Streaming Attempt {retries + 1}): {e}",
-                        exc_info=True,
-                    )
-                    break
-                except google.api_core.exceptions.GoogleAPICallError as e:
-                    last_error = e
-                    logger.error(
-                        f"[{request_id}] Vertex API Call Error (Non-Streaming Attempt {retries + 1}): {e}",
-                        exc_info=True,
-                    )
-                    break
-                except Exception as e:
-                    last_error = e
-                    logger.critical(
-                        f"[{request_id}] Unexpected error during non-streaming call attempt {retries + 1}: {e}",
-                        exc_info=True,
-                    )
-                    break
+                    return response
 
-            if vertex_response is None or (
-                vertex_response.candidates
-                and vertex_response.candidates[0].finish_reason == FinishReason.MALFORMED_FUNCTION_CALL
-            ):
-                error_detail = f"Upstream model failed after {retries} retries."
-                if last_error:
-                    error_detail += f" Last error: {str(last_error)}"
-                status_code = 502
-                if isinstance(last_error, google.api_core.exceptions.InvalidArgument):
+                # Start the retry process
+                return await attempt_generate()
+
+            # Execute the retry-wrapped function
+            try:
+                vertex_response = await generate_with_retry()
+
+                # Special handling for malformed function call that wasn't resolved by retry
+                if (
+                    vertex_response.candidates
+                    and vertex_response.candidates[0].finish_reason == FinishReason.MALFORMED_FUNCTION_CALL
+                ):
+                    finish_message = getattr(vertex_response.candidates[0], "finish_message", "N/A")
+                    error_detail = (
+                        f"Upstream model returned malformed function call after retries. Message: {finish_message}"
+                    )
+                    logger.error(f"[{request_id}] {error_detail}")
+                    raise HTTPException(status_code=502, detail=error_detail)
+
+            except RetryError as e:
+                # Handle retry exhaustion (all retries failed)
+                logger.error(f"[{request_id}] Retry exhausted for Vertex API call: {e.last_attempt.exception()}")
+                original_error = e.last_attempt.exception()
+                status_code = 502  # Default bad gateway
+
+                # Map specific exceptions to appropriate status codes
+                if isinstance(original_error, google.api_core.exceptions.InvalidArgument):
                     status_code = 400
-                elif isinstance(last_error, google.api_core.exceptions.GoogleAPICallError):
-                    status_code = getattr(last_error, "code", 502)
-                raise HTTPException(status_code=status_code, detail=error_detail)
+                elif isinstance(original_error, google.api_core.exceptions.GoogleAPICallError):
+                    status_code = getattr(original_error, "code", 502)
+
+                raise HTTPException(
+                    status_code=status_code, detail=f"Upstream API failed after multiple retries: {str(original_error)}"
+                )
+
+            except google.api_core.exceptions.InvalidArgument as e:
+                # Non-retryable error: Invalid arguments
+                logger.error(
+                    f"[{request_id}] Vertex API Invalid Argument Error: {e}",
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=400, detail=f"Upstream API Invalid Argument: {e.message or str(e)}")
+
+            except Exception as e:
+                # Unexpected errors
+                logger.critical(
+                    f"[{request_id}] Unexpected error during non-streaming call: {e}",
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
             # --- Convert Vertex AI Response -> Intermediate LiteLLM/OpenAI Format ---
             litellm_like_response = convert_vertex_response_to_litellm(
@@ -440,7 +483,7 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                 logger.error(f"[{request_id}] Failed to convert final response to Anthropic format.")
                 raise HTTPException(status_code=500, detail="Failed to convert response to Anthropic format")
 
-            response = JSONResponse(content=anthropic_response.dict())
+            response = JSONResponse(content=anthropic_response.model_dump())
             response.headers["X-Mapped-Model"] = actual_gemini_model_id
             response.headers["X-Request-ID"] = request_id
             processing_time = time.time() - start_time
@@ -561,13 +604,12 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
             0,
             status_code,
         )
-        return JSONResponse(content=response.dict(), headers=response_headers)
+        return JSONResponse(content=response.model_dump(), headers=response_headers)
 
-    # --- Fallback Estimation (Only if SDK call fails unexpectedly) ---
+    # --- Handle errors for token counting ---
     except google.api_core.exceptions.GoogleAPICallError as e:
         logger.error(f"[{request_id}] Vertex SDK count_tokens failed: {e}", exc_info=True)
         status_code = getattr(e, "code", 502)
-        # Don't fallback here, report the upstream error
         log_request_beautifully(
             raw_request.method, raw_request.url.path, original_model_name, actual_gemini_model_id, 0, 0, status_code
         )
@@ -583,31 +625,10 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
         if not str(e.detail).startswith(f"[{request_id}]"):
             e.detail = f"[{request_id}] {e.detail}"
         raise e
-    except Exception as e:  # Fallback to basic estimation for truly unexpected errors
-        # TODO: This fallback character-based token estimation will be removed in Task 5
-        # and replaced with proper error propagation
-        logger.error(
-            f"[{request_id}] Unexpected error during token counting, falling back to estimation: {e}", exc_info=True
-        )
-        prompt_text = ""
-        if request_data.system:
-            system_text_fallback = (
-                request_data.system
-                if isinstance(request_data.system, str)
-                else "\n".join([b.text for b in request_data.system if b.type == "text"])
-            )
-            prompt_text += system_text_fallback + "\n"
-        for msg in request_data.messages:
-            msg_content_fallback = ""
-            if isinstance(msg.content, str):
-                msg_content_fallback = msg.content
-            elif isinstance(msg.content, list):
-                msg_content_fallback = "\n".join([b.text for b in msg.content if b.type == "text"])
-            prompt_text += msg_content_fallback + "\n"
-
-        token_estimate = len(prompt_text) // 4  # Rough estimate
-        logger.warning(f"[{request_id}] Using char/4 estimation: {token_estimate}")
-        status_code = 200  # Return 200 but with an estimate
+    except Exception as e:
+        # Handle any other unexpected errors with appropriate error propagation
+        logger.error(f"[{request_id}] Unexpected error during token counting: {e}", exc_info=True)
+        status_code = 500
         log_request_beautifully(
             raw_request.method,
             raw_request.url.path,
@@ -617,18 +638,8 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
             0,
             status_code,
         )
-        # Note: This entire token estimation fallback will be removed in Task 5
-        # and replaced with proper error propagation
-        return JSONResponse(
-            content={
-                "input_tokens": token_estimate,
-                "note": f"[{request_id}] Token count is an estimate due to upstream error",
-            },
-            headers={
-                "X-Mapped-Model": actual_gemini_model_id,
-                "X-Request-ID": request_id,
-                "X-Token-Estimation": "true",
-            },
+        raise HTTPException(
+            status_code=status_code, detail=f"[{request_id}] Unexpected error during token counting: {str(e)}"
         )
     finally:
         processing_time = time.time() - start_time

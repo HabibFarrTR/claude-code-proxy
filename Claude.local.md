@@ -33,7 +33,7 @@ MALFORMED_FUNCTION_CALL.
 - Verification: Test tool calls that previously failed, especially those using enum or specific formats. Observe if
 MALFORMED_FUNCTION_CALL errors decrease. Examine logs to see the cleaned schema being sent.
 
-### Task 3: Implement tool_config Mode Setting
+### Task 3: Implement tool_config Mode Setting - Completed
 - Goal: Correctly translate Anthropic's tool_choice to Gemini's tool_config modes (AUTO/ANY/NONE).
 - Actions:
   - Modify src/server.py:
@@ -49,7 +49,7 @@ refusing to call).
 ## Phase 2: Improving Robustness & Maintainability
 
 
-### Task 4: Refactor Request ID Handling & Body Parsing  - Completed
+### Task 4: Refactor Request ID Handling & Body Parsing - Completed
 - Goal: Standardize request ID tracking and eliminate redundant request body parsing.
 - Actions:
   - Modify src/server.py:
