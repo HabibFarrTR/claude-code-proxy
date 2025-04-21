@@ -159,21 +159,6 @@ url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
 reference = "tr"
 
 [[package]]
-name = "antlr4-python3-runtime"
-version = "4.9.3"
-description = "ANTLR 4.9.3 runtime for Python 3.7"
-optional = false
-python-versions = "*"
-files = [
-    {file = "antlr4-python3-runtime-4.9.3.tar.gz", hash = "sha256:f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b"},
-]
-
-[package.source]
-type = "legacy"
-url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
-reference = "tr"
-
-[[package]]
 name = "anyio"
 version = "4.9.0"
 description = "High level compatibility layer for multiple asynchronous event loop implementations"
@@ -858,13 +843,13 @@ reference = "tr"
 
 [[package]]
 name = "cloudpickle"
-version = "3.1.1"
-description = "Pickler class to extend the standard pickle.Pickler functionality"
+version = "2.2.1"
+description = "Extended pickling support for Python objects"
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.6"
 files = [
-    {file = "cloudpickle-3.1.1-py3-none-any.whl", hash = "sha256:c8c5a44295039331ee9dad40ba100a9c7297b6f988e50e87ccdf3765a668350e"},
-    {file = "cloudpickle-3.1.1.tar.gz", hash = "sha256:b216fa8ae4019d5482a8ac3c95d8f6346115d8835911fd4aefd1a445e4242c64"},
+    {file = "cloudpickle-2.2.1-py3-none-any.whl", hash = "sha256:61f594d1f4c295fa5cd9014ceb3a1fc4a70b0de1164b94fbc2d854ccba056f9f"},
+    {file = "cloudpickle-2.2.1.tar.gz", hash = "sha256:d89684b8de9e34a2a43b3460fbca07d09d6e25ce858df4d5a44240403b6178f5"},
 ]
 
 [package.source]
@@ -1881,19 +1866,19 @@ reference = "tr"
 
 [[package]]
 name = "grpcio-status"
-version = "1.71.0"
+version = "1.62.3"
 description = "Status proto mapping for gRPC"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.6"
 files = [
-    {file = "grpcio_status-1.71.0-py3-none-any.whl", hash = "sha256:843934ef8c09e3e858952887467f8256aac3910c55f077a359a65b2b3cde3e68"},
-    {file = "grpcio_status-1.71.0.tar.gz", hash = "sha256:11405fed67b68f406b3f3c7c5ae5104a79d2d309666d10d61b152e91d28fb968"},
+    {file = "grpcio-status-1.62.3.tar.gz", hash = "sha256:289bdd7b2459794a12cf95dc0cb727bd4a1742c37bd823f760236c937e53a485"},
+    {file = "grpcio_status-1.62.3-py3-none-any.whl", hash = "sha256:f9049b762ba8de6b1086789d8315846e094edac2c50beaf462338b301a8fd4b8"},
 ]
 
 [package.dependencies]
 googleapis-common-protos = ">=1.5.5"
-grpcio = ">=1.71.0"
-protobuf = ">=5.26.1,<6.0dev"
+grpcio = ">=1.62.3"
+protobuf = ">=4.21.6"
 
 [package.source]
 type = "legacy"
@@ -3097,27 +3082,6 @@ url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
 reference = "tr"
 
 [[package]]
-name = "mock"
-version = "4.0.3"
-description = "Rolling backport of unittest.mock for all Pythons"
-optional = false
-python-versions = ">=3.6"
-files = [
-    {file = "mock-4.0.3-py3-none-any.whl", hash = "sha256:122fcb64ee37cfad5b3f48d7a7d51875d7031aaf3d8be7c42e2bee25044eee62"},
-    {file = "mock-4.0.3.tar.gz", hash = "sha256:7d3fbbde18228f4ff2f1f119a45cdffa458b4c0dee32eb4d2bb2f82554bac7bc"},
-]
-
-[package.extras]
-build = ["blurb", "twine", "wheel"]
-docs = ["sphinx"]
-test = ["pytest (<5.4)", "pytest-cov"]
-
-[package.source]
-type = "legacy"
-url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
-reference = "tr"
-
-[[package]]
 name = "multidict"
 version = "6.4.3"
 description = "multidict implementation"
@@ -3561,26 +3525,6 @@ files = [
     {file = "numpy-1.26.4-pp39-pypy39_pp73-win_amd64.whl", hash = "sha256:7e50d0a0cc3189f9cb0aeb3a6a6af18c16f59f004b866cd2be1c14b36134a4a0"},
     {file = "numpy-1.26.4.tar.gz", hash = "sha256:2a02aba9ed12e4ac4eb3ea9421c420301a0c6460d9830d74a9df87efa4912010"},
 ]
-
-[package.source]
-type = "legacy"
-url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
-reference = "tr"
-
-[[package]]
-name = "omegaconf"
-version = "2.3.0"
-description = "A flexible configuration library"
-optional = false
-python-versions = ">=3.6"
-files = [
-    {file = "omegaconf-2.3.0-py3-none-any.whl", hash = "sha256:7b4df175cdb08ba400f45cae3bdcae7ba8365db4d165fc65fd04b050ab63b46b"},
-    {file = "omegaconf-2.3.0.tar.gz", hash = "sha256:d5d4b6d29955cc50ad50c46dc269bcd92c6e00f5f90d23ab5fee7bfca4ba4cc7"},
-]
-
-[package.dependencies]
-antlr4-python3-runtime = "==4.9.*"
-PyYAML = ">=5.1.0"
 
 [package.source]
 type = "legacy"
@@ -4119,22 +4063,22 @@ reference = "tr"
 
 [[package]]
 name = "protobuf"
-version = "5.29.4"
+version = "4.25.6"
 description = ""
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "protobuf-5.29.4-cp310-abi3-win32.whl", hash = "sha256:13eb236f8eb9ec34e63fc8b1d6efd2777d062fa6aaa68268fb67cf77f6839ad7"},
-    {file = "protobuf-5.29.4-cp310-abi3-win_amd64.whl", hash = "sha256:bcefcdf3976233f8a502d265eb65ea740c989bacc6c30a58290ed0e519eb4b8d"},
-    {file = "protobuf-5.29.4-cp38-abi3-macosx_10_9_universal2.whl", hash = "sha256:307ecba1d852ec237e9ba668e087326a67564ef83e45a0189a772ede9e854dd0"},
-    {file = "protobuf-5.29.4-cp38-abi3-manylinux2014_aarch64.whl", hash = "sha256:aec4962f9ea93c431d5714ed1be1c93f13e1a8618e70035ba2b0564d9e633f2e"},
-    {file = "protobuf-5.29.4-cp38-abi3-manylinux2014_x86_64.whl", hash = "sha256:d7d3f7d1d5a66ed4942d4fefb12ac4b14a29028b209d4bfb25c68ae172059922"},
-    {file = "protobuf-5.29.4-cp38-cp38-win32.whl", hash = "sha256:1832f0515b62d12d8e6ffc078d7e9eb06969aa6dc13c13e1036e39d73bebc2de"},
-    {file = "protobuf-5.29.4-cp38-cp38-win_amd64.whl", hash = "sha256:476cb7b14914c780605a8cf62e38c2a85f8caff2e28a6a0bad827ec7d6c85d68"},
-    {file = "protobuf-5.29.4-cp39-cp39-win32.whl", hash = "sha256:fd32223020cb25a2cc100366f1dedc904e2d71d9322403224cdde5fdced0dabe"},
-    {file = "protobuf-5.29.4-cp39-cp39-win_amd64.whl", hash = "sha256:678974e1e3a9b975b8bc2447fca458db5f93a2fb6b0c8db46b6675b5b5346812"},
-    {file = "protobuf-5.29.4-py3-none-any.whl", hash = "sha256:3fde11b505e1597f71b875ef2fc52062b6a9740e5f7c8997ce878b6009145862"},
-    {file = "protobuf-5.29.4.tar.gz", hash = "sha256:4f1dfcd7997b31ef8f53ec82781ff434a28bf71d9102ddde14d076adcfc78c99"},
+    {file = "protobuf-4.25.6-cp310-abi3-win32.whl", hash = "sha256:61df6b5786e2b49fc0055f636c1e8f0aff263808bb724b95b164685ac1bcc13a"},
+    {file = "protobuf-4.25.6-cp310-abi3-win_amd64.whl", hash = "sha256:b8f837bfb77513fe0e2f263250f423217a173b6d85135be4d81e96a4653bcd3c"},
+    {file = "protobuf-4.25.6-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:6d4381f2417606d7e01750e2729fe6fbcda3f9883aa0c32b51d23012bded6c91"},
+    {file = "protobuf-4.25.6-cp37-abi3-manylinux2014_aarch64.whl", hash = "sha256:5dd800da412ba7f6f26d2c08868a5023ce624e1fdb28bccca2dc957191e81fb5"},
+    {file = "protobuf-4.25.6-cp37-abi3-manylinux2014_x86_64.whl", hash = "sha256:4434ff8bb5576f9e0c78f47c41cdf3a152c0b44de475784cd3fd170aef16205a"},
+    {file = "protobuf-4.25.6-cp38-cp38-win32.whl", hash = "sha256:8bad0f9e8f83c1fbfcc34e573352b17dfce7d0519512df8519994168dc015d7d"},
+    {file = "protobuf-4.25.6-cp38-cp38-win_amd64.whl", hash = "sha256:b6905b68cde3b8243a198268bb46fbec42b3455c88b6b02fb2529d2c306d18fc"},
+    {file = "protobuf-4.25.6-cp39-cp39-win32.whl", hash = "sha256:3f3b0b39db04b509859361ac9bca65a265fe9342e6b9406eda58029f5b1d10b2"},
+    {file = "protobuf-4.25.6-cp39-cp39-win_amd64.whl", hash = "sha256:6ef2045f89d4ad8d95fd43cd84621487832a61d15b49500e4c1350e8a0ef96be"},
+    {file = "protobuf-4.25.6-py3-none-any.whl", hash = "sha256:07972021c8e30b870cfc0863409d033af940213e0e7f64e27fe017b929d2c9f7"},
+    {file = "protobuf-4.25.6.tar.gz", hash = "sha256:f8cfbae7c5afd0d0eaccbe73267339bff605a2315860bb1ba08eb66670a9a91f"},
 ]
 
 [package.source]
@@ -4995,13 +4939,13 @@ reference = "tr"
 
 [[package]]
 name = "rich"
-version = "13.9.4"
+version = "14.0.0"
 description = "Render rich text, tables, progress bars, syntax highlighting, markdown and more to the terminal"
 optional = false
 python-versions = ">=3.8.0"
 files = [
-    {file = "rich-13.9.4-py3-none-any.whl", hash = "sha256:6049d5e6ec054bf2779ab3358186963bac2ea89175919d699e378b99738c2a90"},
-    {file = "rich-13.9.4.tar.gz", hash = "sha256:439594978a49a09530cff7ebc4b5c7103ef57baf48d5ea3184f21d9a2befa098"},
+    {file = "rich-14.0.0-py3-none-any.whl", hash = "sha256:1c9491e1951aac09caffd42f448ee3d04e58923ffe14993f6e83068dc395d7e0"},
+    {file = "rich-14.0.0.tar.gz", hash = "sha256:82f1bc23a6a21ebca4ae0c45af9bdbc492ed20231dcb63f297d6d1021a9d5725"},
 ]
 
 [package.dependencies]
@@ -5229,79 +5173,45 @@ reference = "tr"
 
 [[package]]
 name = "sagemaker"
-version = "2.243.1"
+version = "2.230.0"
 description = "Open source library for training and deploying models on Amazon SageMaker."
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "sagemaker-2.243.1-py3-none-any.whl", hash = "sha256:c178f5de5dc0b49dab4cca9e6674204e9b1a3850455337eed471edf0b128c10e"},
-    {file = "sagemaker-2.243.1.tar.gz", hash = "sha256:2516c31ff4fe23fb49524db698679bf41ebdd8cadd5d603a5bd925585b776b66"},
+    {file = "sagemaker-2.230.0-py3-none-any.whl", hash = "sha256:270680760192b962b3e2b94f95ee464ae9908bbdbdc6034c06680d6584b638de"},
+    {file = "sagemaker-2.230.0.tar.gz", hash = "sha256:f8e89f01658c91a40767d25f6c4d6796912b59d7cba13522bcee9b84eae2dfa7"},
 ]
 
 [package.dependencies]
 attrs = ">=23.1.0,<24"
-boto3 = ">=1.35.75,<2.0"
-cloudpickle = ">=2.2.1"
+boto3 = ">=1.34.142,<2.0"
+cloudpickle = "2.2.1"
 docker = "*"
-fastapi = "*"
 google-pasta = "*"
 importlib-metadata = ">=1.4.0,<7.0"
 jsonschema = "*"
 numpy = ">=1.9.0,<2.0"
-omegaconf = ">=2.2,<=2.3"
 packaging = ">=20.0"
 pandas = "*"
 pathos = "*"
 platformdirs = "*"
-protobuf = ">=3.12,<6.0"
+protobuf = ">=3.12,<5.0"
 psutil = "*"
 pyyaml = ">=6.0,<7.0"
 requests = "*"
-sagemaker-core = ">=1.0.17,<2.0.0"
 schema = "*"
 smdebug-rulesconfig = "1.0.1"
 tblib = ">=1.7.0,<4"
 tqdm = "*"
 urllib3 = ">=1.26.8,<3.0.0"
-uvicorn = "*"
 
 [package.extras]
-all = ["accelerate (>=0.24.1,<=0.27.0)", "docker (>=5.0.2,<8.0.0)", "fastapi (>=0.111.0)", "nest-asyncio", "pyspark (==3.3.2)", "pyyaml (>=5.4.1,<7)", "sagemaker-feature-store-pyspark-3-3", "sagemaker-mlflow (>=0.1.0)", "sagemaker-schema-inference-artifacts (>=0.0.5)", "scipy (==1.10.1)", "urllib3 (>=1.26.8,<3.0.0)", "uvicorn (>=0.30.1)"]
-feature-processor = ["pyspark (==3.3.2)", "sagemaker-feature-store-pyspark-3-3"]
+all = ["accelerate (>=0.24.1,<=0.27.0)", "docker (>=5.0.2,<8.0.0)", "fastapi (>=0.111.0)", "nest-asyncio", "pyspark (==3.3.1)", "pyyaml (>=5.4.1,<7)", "sagemaker-feature-store-pyspark-3-3", "sagemaker-schema-inference-artifacts (>=0.0.5)", "scipy (==1.10.1)", "urllib3 (>=1.26.8,<3.0.0)", "uvicorn (>=0.30.1)"]
+feature-processor = ["pyspark (==3.3.1)", "sagemaker-feature-store-pyspark-3-3"]
 huggingface = ["accelerate (>=0.24.1,<=0.27.0)", "fastapi (>=0.111.0)", "nest-asyncio", "sagemaker-schema-inference-artifacts (>=0.0.5)", "uvicorn (>=0.30.1)"]
 local = ["docker (>=5.0.2,<8.0.0)", "pyyaml (>=5.4.1,<7)", "urllib3 (>=1.26.8,<3.0.0)"]
-sagemaker-mlflow = ["sagemaker-mlflow (>=0.1.0)"]
 scipy = ["scipy (==1.10.1)"]
-test = ["accelerate (>=0.24.1,<=0.27.0)", "apache-airflow (==2.9.3)", "apache-airflow-providers-amazon (==7.2.1)", "attrs (>=23.1.0,<24)", "awslogs (==0.14.0)", "black (==24.3.0)", "build[virtualenv] (==1.2.1)", "cloudpickle (==2.2.1)", "contextlib2 (==21.6.0)", "coverage (>=5.2,<6.2)", "deepdiff (>=8.0.0)", "docker (>=5.0.2,<8.0.0)", "fabric (==2.6.0)", "fastapi (==0.115.4)", "fastapi (>=0.111.0)", "flake8 (==4.0.1)", "huggingface-hub (==0.26.2)", "jinja2 (==3.1.6)", "jsonpickle (<4.0.0)", "mlflow (>=2.12.2,<2.13)", "mock (==4.0.3)", "nbformat (>=5.9,<6)", "nest-asyncio", "numpy (>=1.24.0)", "onnx (==1.17.0)", "opentelemetry-proto (==1.27.0)", "pandas (==1.4.4)", "pillow (>=10.0.1,<=11)", "protobuf (==4.25.5)", "pyspark (==3.3.2)", "pytest (==6.2.5)", "pytest-cov (==3.0.0)", "pytest-rerunfailures (==10.2)", "pytest-timeout (==2.1.0)", "pytest-xdist (==2.4.0)", "pyvis (==0.2.1)", "pyyaml (==6.0)", "pyyaml (>=5.4.1,<7)", "requests (==2.32.2)", "sagemaker-experiments (==0.1.35)", "sagemaker-feature-store-pyspark-3-3", "sagemaker-mlflow (>=0.1.0)", "sagemaker-schema-inference-artifacts (>=0.0.5)", "schema (==0.7.5)", "scikit-learn (==1.3.0)", "scipy (==1.10.1)", "stopit (==1.1.2)", "tensorboard (>=2.9.0,<=2.15.2)", "tensorflow (>=2.9.0,<=2.15.1)", "tox (==3.24.5)", "tritonclient[http] (<2.37.0)", "urllib3 (>=1.26.8,<3.0.0)", "uvicorn (>=0.30.1)", "xgboost (>=1.6.2,<=1.7.6)"]
-
-[package.source]
-type = "legacy"
-url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
-reference = "tr"
-
-[[package]]
-name = "sagemaker-core"
-version = "1.0.29"
-description = "An python package for sagemaker core functionalities"
-optional = false
-python-versions = ">=3.8"
-files = [
-    {file = "sagemaker_core-1.0.29-py3-none-any.whl", hash = "sha256:afa0c59b17d096484c0279b89cf66e1df62b0213c51c68372fcf70b7f605e8b6"},
-    {file = "sagemaker_core-1.0.29.tar.gz", hash = "sha256:584dfb29261aba1aaa1491ce51bd8482f3645f895d6c6d386b6377cb63aeb81e"},
-]
-
-[package.dependencies]
-boto3 = ">=1.35.75,<2.0.0"
-importlib-metadata = ">=1.4.0,<7.0"
-jsonschema = "<5.0.0"
-mock = ">4.0,<5.0"
-platformdirs = ">=4.0.0,<5.0.0"
-pydantic = ">=2.0.0,<3.0.0"
-PyYAML = ">=6.0,<7.0"
-rich = ">=13.0.0,<14.0.0"
-
-[package.extras]
-codegen = ["black (>=24.3.0,<25.0.0)", "pandas (>=2.0.0,<3.0.0)", "pylint (>=3.0.0,<4.0.0)", "pytest (>=8.0.0,<9.0.0)"]
+test = ["accelerate (>=0.24.1,<=0.27.0)", "apache-airflow (==2.9.3)", "apache-airflow-providers-amazon (==7.2.1)", "attrs (>=23.1.0,<24)", "awslogs (==0.14.0)", "black (==24.3.0)", "build[virtualenv] (==1.2.1)", "cloudpickle (==2.2.1)", "contextlib2 (==21.6.0)", "coverage (>=5.2,<6.2)", "docker (>=5.0.2,<8.0.0)", "fabric (==2.6.0)", "fastapi (>=0.111.0)", "flake8 (==4.0.1)", "huggingface-hub (>=0.23.4)", "jinja2 (==3.1.4)", "mlflow (>=2.12.2,<2.13)", "mock (==4.0.3)", "nbformat (>=5.9,<6)", "nest-asyncio", "numpy (>=1.24.0)", "onnx (>=1.15.0)", "pandas (>=1.3.5,<1.5)", "pillow (>=10.0.1,<=11)", "pyspark (==3.3.1)", "pytest (==6.2.5)", "pytest-cov (==3.0.0)", "pytest-rerunfailures (==10.2)", "pytest-timeout (==2.1.0)", "pytest-xdist (==2.4.0)", "pyvis (==0.2.1)", "pyyaml (==6.0)", "pyyaml (>=5.4.1,<7)", "requests (==2.32.2)", "sagemaker-experiments (==0.1.35)", "sagemaker-feature-store-pyspark-3-3", "sagemaker-schema-inference-artifacts (>=0.0.5)", "schema (==0.7.5)", "scikit-learn (==1.3.0)", "scipy (==1.10.1)", "stopit (==1.1.2)", "tensorflow (>=2.1,<=2.16)", "tox (==3.24.5)", "tritonclient[http] (<2.37.0)", "urllib3 (>=1.26.8,<3.0.0)", "uvicorn (>=0.30.1)", "xgboost (>=1.6.2,<=1.7.6)"]
 
 [package.source]
 type = "legacy"
@@ -6666,4 +6576,4 @@ reference = "tr"
 [metadata]
 lock-version = "2.0"
 python-versions = "~3.11"
-content-hash = "cbfabfe397049d872ab4c6dd648a0fe757fc8191350ee5a01674360c98989def"
+content-hash = "f97ec2c45c6d7216600e109c099f40ac752cdaf2d6427bfa25041757304b8dac"

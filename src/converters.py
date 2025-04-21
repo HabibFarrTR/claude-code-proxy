@@ -35,7 +35,11 @@ from src.models import (
     MessagesResponse,
     Usage,
 )
-from src.utils import get_logger
+from src.utils import (
+    get_logger,
+    smart_format_proto_str,
+    smart_format_str,
+)
 
 logger = get_logger()
 
@@ -176,16 +180,20 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
     if request.tools:
         openai_tools = []
         for tool in request.tools:
-            input_schema = tool.input_schema.dict(exclude_unset=True)
+            input_schema = tool.input_schema.model_dump(exclude_unset=True)
             logger.debug(f"Cleaning schema for intermediate tool format: {tool.name}")
             # Clean the schema *before* putting it into the intermediate format
+            logger.debug(f"Original schema for tool '{tool.name}': {smart_format_str(input_schema)}")
             cleaned_schema = clean_gemini_schema(input_schema)
+            logger.debug(f"Cleaned schema for tool '{tool.name}': {smart_format_str(cleaned_schema)}")
 
             # Ensure basic structure expected by Vertex SDK later
             if "properties" in cleaned_schema and "type" not in cleaned_schema:
                 cleaned_schema["type"] = "object"
+                logger.debug(f"Added missing 'type': 'object' to schema with properties for tool '{tool.name}'")
             if cleaned_schema.get("type") == "object" and "properties" not in cleaned_schema:
                 cleaned_schema["properties"] = {}  # Ensure properties key exists
+                logger.debug(f"Added missing empty 'properties' object for tool '{tool.name}'")
 
             openai_tools.append(
                 {
@@ -216,57 +224,103 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
             f"Converted tool_choice '{choice_type}' to intermediate format '{litellm_request['tool_choice']}'."
         )
 
-    logger.debug(
-        f"Intermediate LiteLLM/OpenAI Request Prepared: {json.dumps(litellm_request, indent=2, default=lambda o: '<not serializable>')}"
-    )
+    logger.debug(f"Intermediate LiteLLM/OpenAI Request Prepared: {smart_format_str(litellm_request)}")
     return litellm_request
 
 
 def clean_gemini_schema(schema: Any) -> Any:
-    """Clean JSON schema to ensure compatibility with Gemini API requirements.
+    """Recursively removes unsupported fields from a JSON schema for Gemini."""
 
-    Recursively processes a JSON schema to remove or modify fields that are
-    unsupported by Gemini's more restrictive schema validation. This includes:
-    - Removing additionalProperties fields
-    - Removing unsupported string formats
-    - Removing default values
-    - Cleaning up null values in arrays
-
-    Args:
-        schema: The JSON schema to clean (dict, list, or primitive value)
-
-    Returns:
-        Any: The cleaned schema compatible with Gemini's expectations
-    """
     if isinstance(schema, dict):
-        # Remove fields known to cause issues with Gemini's schema validation
-        schema.pop("additionalProperties", None)
+        # Remove specific keys unsupported by Gemini tool parameters
         schema.pop("default", None)
-        # Gemini might not support all string formats, remove if not explicitly supported
-        if schema.get("type") == "string" and "format" in schema:
-            # Keep only formats known to be generally safe or potentially useful
-            # Removed 'enum' as it's not a standard format, handled by 'enum' keyword directly
-            if schema["format"] not in {"date-time", "uri"}:  # Keep uri? Check Gemini docs. Let's keep for now.
-                logger.debug(f"Removing potentially unsupported string format '{schema['format']}'")
-                schema.pop("format")
-        # Recurse into nested structures
-        for key, value in list(schema.items()):  # Use list() for safe iteration while potentially popping
-            if key in ["properties", "items"] or isinstance(value, (dict, list)):
-                schema[key] = clean_gemini_schema(value)
-            # Remove null values as they can sometimes cause issues
-            elif value is None:
-                # Check if the key is 'required' list, nulls are invalid there anyway
-                if key == "required" and isinstance(schema[key], list):
-                    schema[key] = [item for item in schema[key] if item is not None]
-                    if not schema[key]:  # Remove empty required list
-                        schema.pop(key)
-                elif key != "required":  # Don't remove required itself if it becomes null, but remove other nulls
-                    logger.debug(f"Removing null value for key '{key}'")
-                    schema.pop(key)
 
+        if "additionalProperties" in schema:
+            value = schema["additionalProperties"]
+            # If additionalProperties is true, we can map it to a Vertex-compatible format
+            if value is True:
+                logger.info("Mapping additionalProperties: true to a type-agnostic property schema")
+                # Remove additionalProperties but add a property that can accept any value
+                schema.pop("additionalProperties")
+
+                # Ensure properties exists
+                if "properties" not in schema:
+                    schema["properties"] = {}
+
+                if "type" not in schema:
+                    schema["type"] = "object"
+
+                # Add a * wildcard property schema that can accept any type
+                # This is our best approximation for additionalProperties: true
+                if schema["type"] == "object" and "_additionalProps" not in schema["properties"]:
+                    # Create a schema that has both type at the top level and in properties
+                    schema_with_wildcard = {
+                        "type": "object",
+                        "description": "Supports additional properties of any type",
+                        "properties": {
+                            # Add a wildcard field with its own type
+                            "*": {"type": "string", "description": "Any field name is accepted"}
+                        },
+                    }
+                    schema["properties"]["_additionalProps"] = schema_with_wildcard
+                    logger.info(
+                        "Added '_additionalProps' field with wildcard schema to represent additionalProperties capability"
+                    )
+            elif isinstance(value, dict):
+                # If additionalProperties has a schema, incorporate it into properties
+                logger.info("Mapping schema-based additionalProperties to a type-specific property")
+                schema.pop("additionalProperties")
+
+                # Ensure properties exists
+                if "properties" not in schema:
+                    schema["properties"] = {}
+
+                if "type" not in schema:
+                    schema["type"] = "object"
+
+                # Add a property that matches the additionalProperties schema
+                if schema["type"] == "object" and "_additionalProps" not in schema["properties"]:
+                    # Clean the schema first
+                    prop_schema = clean_gemini_schema(value)
+
+                    # Ensure the additionalProperties schema has a type
+                    if "type" not in prop_schema:
+                        # Default to object if no type is specified
+                        prop_schema["type"] = "object"
+                        logger.warning("Added missing 'type' field to additionalProperties schema")
+
+                    # Wrap it in an object with properties to ensure proper nesting
+                    wrapped_schema = {
+                        "type": "object",
+                        "description": "Schema for additional properties",
+                        "properties": {
+                            # Use the schema type as the property name for clarity
+                            prop_schema.get("type", "value"): prop_schema
+                        },
+                    }
+
+                    schema["properties"]["_additionalProps"] = wrapped_schema
+                    logger.info(
+                        "Added '_additionalProps' field with wrapped schema to represent additionalProperties capability"
+                    )
+            else:
+                # For false or other values, we can safely remove it
+                logger.warning(f"Removing additionalProperties with value {value} as it's not supported by Gemini API")
+                schema.pop("additionalProperties")
+
+        # Check for unsupported 'format' in string types
+        if schema.get("type") == "string" and "format" in schema:
+            allowed_formats = {"enum", "date-time"}
+            if schema["format"] not in allowed_formats:
+                logger.debug(f"Removing unsupported format '{schema['format']}' for string type in Gemini schema.")
+                schema.pop("format")
+
+        # Recursively clean nested schemas (properties, items, etc.)
+        for key, value in list(schema.items()):  # Use list() to allow modification during iteration
+            schema[key] = clean_gemini_schema(value)
     elif isinstance(schema, list):
-        # Also clean items within lists (e.g., in 'required' list or 'enum' list)
-        return [clean_gemini_schema(item) for item in schema if item is not None]  # Remove None items from lists too
+        # Recursively clean items in a list
+        return [clean_gemini_schema(item) for item in schema]
     return schema
 
 
@@ -297,6 +351,9 @@ def convert_litellm_tools_to_vertex_tools(litellm_tools: Optional[List[Dict]]) -
             description = func_data.get("description")
             parameters_schema = func_data.get("parameters")  # Schema should already be cleaned
 
+            # Log the schema being passed to Vertex
+            logger.debug(f"Processing schema for Vertex tool '{name}': {smart_format_str(parameters_schema)}")
+
             if name and parameters_schema is not None:  # Allow empty schema {}
                 try:
                     # Create the FunctionDeclaration
@@ -305,7 +362,9 @@ def convert_litellm_tools_to_vertex_tools(litellm_tools: Optional[List[Dict]]) -
                     )
                     # Add the declaration to our list
                     all_function_declarations.append(func_decl)
-                    logger.debug(f"Collected FunctionDeclaration for tool '{name}'.")
+                    logger.info(
+                        f"Successfully created Vertex FunctionDeclaration for tool '{name}' with preserved schema structure"
+                    )
                 except Exception as e:
                     # Log detailed error if schema validation fails at SDK level
                     logger.error(
@@ -644,7 +703,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
                 part_reprs.append(f"{part_type}{part_detail}")
             final_history_repr.append({"index": content_idx, "role": content.role, "part_types": part_reprs})
         logger.debug(
-            f"[{request_id_for_logging}] Final Vertex history structure: {json.dumps(final_history_repr, indent=2)}"
+            f"[{request_id_for_logging}] Final Vertex history structure: {smart_format_str(final_history_repr)}"
         )
     except Exception as e:
         logger.debug(f"[{request_id_for_logging}] Could not serialize final Vertex history structure for logging: {e}")
@@ -653,7 +712,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
 
 
 def convert_litellm_to_anthropic(
-    response_chunk: Union[Dict, Any], original_model_name: str
+    response_chunk: Union[Dict, Any], original_model_name: Optional[str] = None
 ) -> Optional[MessagesResponse]:
     """Convert OpenAI-format response to Anthropic API response format.
 
@@ -759,10 +818,13 @@ def convert_litellm_to_anthropic(
             f"[{request_id}] Mapped finish_reason '{openai_finish_reason}' to stop_reason '{anthropic_stop_reason}'."
         )
 
+        # Ensure we have a valid model name (required by Anthropic API)
+        model_name = original_model_name if original_model_name else "claude-3.7-sonnet"
+
         # Create the final Anthropic response object
         return MessagesResponse(
             id=resp_id,
-            model=original_model_name,  # Use the original model name requested by the client
+            model=model_name,  # Use the original model name or a default
             type="message",
             role="assistant",
             content=anthropic_content,
@@ -778,9 +840,12 @@ def convert_litellm_to_anthropic(
             f"[{request_id}] Failed to convert adapted LiteLLM/OpenAI response to Anthropic format: {e}", exc_info=True
         )
         # Return a minimal error response in Anthropic format
+        # Ensure we have a valid model name here too
+        model_name = original_model_name if original_model_name else "claude-3.7-sonnet"
+
         return MessagesResponse(
             id=f"error_{uuid.uuid4().hex[:24]}",
-            model=original_model_name,
+            model=model_name,
             type="message",
             role="assistant",
             content=[ContentBlockText(type="text", text=f"Error processing model response: {str(e)}")],
@@ -923,7 +988,9 @@ async def convert_litellm_to_anthropic_sse(
                 logger.debug(f"[{request_id}] Sent text delta: '{text_delta[:50]}...'")
 
             # 2. Handle Tool Calls Delta
+            # 2. Handle Tool Calls Delta
             if tool_calls_delta and isinstance(tool_calls_delta, list):
+                logger.debug(f"[{request_id}] Received tool_calls_delta: {tool_calls_delta}")
                 # If currently in a text block, stop it first
                 if current_block_type == "text" and text_started:
                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': content_block_index})}\n\n"
@@ -1057,7 +1124,11 @@ async def convert_litellm_to_anthropic_sse(
             if tool_calls_buffer:
                 last_tool_block_idx = tool_calls_buffer[max(tool_calls_buffer.keys())]["block_idx"]
                 if last_tool_block_idx is not None:
-                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': last_tool_block_idx})}\n\n"
+                    stop_event_data = {"type": "content_block_stop", "index": last_tool_block_idx}
+                    logger.debug(
+                        f"[{request_id}] Yielding content_block_stop for tool_use: {json.dumps(stop_event_data)}"
+                    )
+                    yield f"event: content_block_stop\ndata: {json.dumps(stop_event_data)}\n\n"
                     logger.debug(f"[{request_id}] Stopped final tool_use block {last_tool_block_idx}")
             else:
                 logger.warning(
@@ -1079,13 +1150,17 @@ async def convert_litellm_to_anthropic_sse(
             },
             "usage": {"output_tokens": final_usage.get("output_tokens", 0)},  # Send accumulated output tokens
         }
+
+        logger.debug(f"[{request_id}] Yielding final message_delta: {json.dumps(final_delta_event)}")
         yield f"event: message_delta\ndata: {json.dumps(final_delta_event)}\n\n"
         logger.debug(
             f"[{request_id}] Sent final message_delta (stop_reason: {final_stop_reason}, usage: {final_delta_event['usage']})"
         )
 
         # 3. Send message_stop event
-        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+        stop_event_data = {"type": "message_stop"}
+        logger.debug(f"[{request_id}] Yielding message_stop: {json.dumps(stop_event_data)}")
+        yield f"event: message_stop\ndata: {json.dumps(stop_event_data)}\n\n"
         logger.debug(f"[{request_id}] Sent message_stop")
 
     except Exception as e:
@@ -1141,7 +1216,7 @@ async def adapt_vertex_stream_to_litellm(
 
     try:
         async for chunk in vertex_stream:
-            logger.debug(f"[{request_id}] Raw Vertex Chunk: {chunk}")
+            logger.debug(f"[{request_id}] Raw Vertex Chunk: {smart_format_proto_str(chunk)}")
 
             delta_content = None
             delta_tool_calls = []
@@ -1230,7 +1305,7 @@ async def adapt_vertex_stream_to_litellm(
                             except AttributeError:
                                 # .function_call also failed. Log an unknown part type.
                                 logger.warning(
-                                    f"[{request_id}] Unknown or unexpected part type encountered in Vertex stream chunk (not text or function_call): {part}"
+                                    f"[{request_id}] Unknown or unexpected part type encountered in Vertex stream chunk (not text or function_call): {smart_format_proto_str(part)}"
                                 )
                             except Exception as e:
                                 # Catch any other unexpected error during part processing
@@ -1267,7 +1342,7 @@ async def adapt_vertex_stream_to_litellm(
                     ],
                     "usage": None,  # Usage usually comes in the final chunk
                 }
-                logger.debug(f"[{request_id}] Yielding adapted LiteLLM chunk: {litellm_chunk}")
+                logger.debug(f"[{request_id}] Yielding adapted LiteLLM chunk: {smart_format_str(litellm_chunk)}")
                 yield litellm_chunk
 
             # --- Check if this chunk signals the end (either normally or via malformed call) ---
@@ -1363,7 +1438,7 @@ async def adapt_vertex_stream_to_litellm(
                     "usage": usage_metadata,  # Include usage if available
                 }
                 logger.debug(
-                    f"[{request_id}] Yielding final adapted LiteLLM chunk with finish_reason: {final_litellm_chunk}"
+                    f"[{request_id}] Yielding final adapted LiteLLM chunk with finish_reason: {smart_format_str(final_litellm_chunk)}"
                 )
                 yield final_litellm_chunk
                 break  # Stop iteration after the final chunk
@@ -1512,5 +1587,7 @@ def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: s
         "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": total_tokens},
         "request_id": request_id,
     }
-    logger.debug(f"[{request_id}] Converted non-streaming Vertex response to LiteLLM/OpenAI format: {litellm_response}")
+    logger.debug(
+        f"[{request_id}] Converted non-streaming Vertex response to LiteLLM/OpenAI format: {smart_format_str(litellm_response)}"
+    )
     return litellm_response

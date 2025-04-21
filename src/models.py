@@ -89,8 +89,14 @@ class MessagesRequest(BaseModel):
 
     @field_validator("model")
     def validate_and_map_model(cls, v, info):
-        # The validator now just returns the mapped Gemini model ID
-        return map_model_name(v)
+        # Store the original model name in the model object before mapping
+        # This ensures we preserve the original Claude model name for later reference
+        info.data["original_model_name"] = v
+
+        # Return the mapped Gemini model ID
+        mapped_model = map_model_name(v)
+        logger.debug(f"Model mapped: '{v}' -> '{mapped_model}'")
+        return mapped_model
 
 
 class TokenCountRequest(BaseModel):
@@ -101,7 +107,14 @@ class TokenCountRequest(BaseModel):
 
     @field_validator("model")
     def validate_and_map_model_token_count(cls, v, info):
-        return map_model_name(v)
+        # Store the original model name in the model object before mapping
+        # This ensures we preserve the original Claude model name for later reference
+        info.data["original_model_name"] = v
+
+        # Return the mapped Gemini model ID
+        mapped_model = map_model_name(v)
+        logger.debug(f"Token count model mapped: '{v}' -> '{mapped_model}'")
+        return mapped_model
 
 
 class TokenCountResponse(BaseModel):

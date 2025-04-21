@@ -48,6 +48,43 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - Comments: Focus on explaining "why" not "what" and avoid trivial comments
 - API design: Follow RESTful principles for endpoints with proper validation
 
+## Testing Guidelines
+
+1. **Test Isolation**: Unit tests should never depend on external services. Use mocks and fixtures.
+
+2. **Test Coverage**: Aim for high test coverage, especially for critical components.
+
+3. **Integration Test Marking**: Always mark tests that use external resources with `@pytest.mark.integration`.
+   There is no need for a separate integration package. Note the integration tests involving LLMs are relatively
+   cheap due to the caching layer, and are encouraged as it is hard to mock the LLM responses properly for many scenarios.
+
+4. **Test Reliability**: Tests should be deterministic and not fail randomly.
+
+### Example: Creating a New Test
+
+```python
+import pytest
+from unittest.mock import MagicMock, patch
+
+# Regular unit test
+def test_feature():
+    # Arrange
+    input_data = "test"
+
+    # Act
+    result = function_under_test(input_data)
+
+    # Assert
+    assert result == expected_output
+
+# Integration test with external dependency
+@pytest.mark.integration
+def test_external_feature():
+    # This test will be skipped when running with -m "not integration"
+    result = function_that_calls_api()
+    assert result is not None
+```
+
 ## Known Limitations 🚫
 
 While this proxy enables using Claude Code with Thomson Reuters AI Platform's Gemini models, several significant limitations exist,
