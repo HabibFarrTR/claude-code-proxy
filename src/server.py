@@ -20,12 +20,12 @@ custom authentication and error handling designed for high reliability.
 """
 
 import asyncio
-import json
 import logging
 import os
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 import google.api_core.exceptions  # To catch API call errors
 import google.auth  # To catch auth errors during vertexai.init
@@ -41,7 +41,7 @@ from vertexai.generative_models import (
     Part,
 )
 
-from src.authenticator import AuthenticationError, get_gemini_credentials
+from src.authenticator import AuthenticationError, CredentialManager
 from src.config import (
     GEMINI_BIG_MODEL,
     GEMINI_SMALL_MODEL,
@@ -79,7 +79,42 @@ logging.getLogger("google.api_core.bidi").setLevel(logging.WARNING)
 logging.getLogger("google.cloud.aiplatform").setLevel(logging.WARNING)  # Quieten Vertex SDK logs if needed
 
 
-app = FastAPI(title="Anthropic to Custom Gemini Proxy (Native SDK Call)")
+# Create a credential manager instance for the application
+credential_manager = CredentialManager()
+
+
+# Define application lifespan using the contextmanager-based approach
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for the application.
+
+    Manages the application startup and shutdown events:
+    - On startup: Initialize credential manager and Vertex AI SDK
+    - On shutdown: Clean up any resources
+    """
+    # --- Startup actions ---
+    logger.info("Application startup: Initializing credential manager...")
+    try:
+        # Initialize credentials and SDK - one time on startup
+        success = await credential_manager.initialize()
+        if success:
+            logger.info("Application startup complete: Credential manager initialized successfully.")
+        else:
+            logger.error("Application startup issue: Failed to initialize credential manager.")
+    except Exception as e:
+        logger.error(f"Application startup error: {e}", exc_info=True)
+        # We don't exit here - the credential manager will retry automatically
+
+    # Yield control back to FastAPI to run the application
+    yield
+
+    # --- Shutdown actions ---
+    logger.info("Application shutting down: Cleaning up resources...")
+    # No specific cleanup needed for credential manager, but we could add if necessary
+
+
+# Create the FastAPI application with the lifespan context manager
+app = FastAPI(title="Anthropic to Custom Gemini Proxy (Native SDK Call)", lifespan=lifespan)
 
 
 @app.post("/v1/messages", response_model=None)  # response_model=None for StreamingResponse
@@ -108,49 +143,33 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
         This endpoint handles model mapping, temperature adjustments for tool calls, and retry logic
         for certain error conditions. It includes comprehensive logging for debugging and monitoring.
     """
-    request_id = f"req_{uuid.uuid4().hex[:12]}"  # Unique ID for this request
+    # Use request ID from middleware
+    request_id = raw_request.state.request_id
     start_time = time.time()
 
     try:
-        # --- Request Parsing and Model Mapping ---
-        try:
-            raw_body = await raw_request.body()
-            original_model_name = json.loads(raw_body.decode()).get("model", "unknown-request-body")
-        except Exception:
-            original_model_name = request_data.original_model_name or "unknown-fallback"
-            logger.warning(
-                f"[{request_id}] Failed to parse raw request body for original model name. Using fallback: {original_model_name}"
-            )
-
-        request_data.original_model_name = original_model_name
+        # --- Use Validated Request Data ---
+        # We now get everything directly from the Pydantic model which has been validated
+        # No need to parse the raw request body again
+        original_model_name = request_data.original_model_name
         actual_gemini_model_id = request_data.model
 
         logger.info(
             f"[{request_id}] Processing '/v1/messages': Original='{original_model_name}', Target SDK Model='{actual_gemini_model_id}', Stream={request_data.stream}"
         )
 
-        # --- Custom Authentication ---
-        project_id, location, temp_creds = None, None, None
+        # --- Get credentials from central credential manager ---
         try:
-            project_id, location, temp_creds = await asyncio.to_thread(get_gemini_credentials)
-            logger.info(f"[{request_id}] Custom authentication successful. Project: {project_id}, Location: {location}")
+            project_id, location, temp_creds = await credential_manager.get_credentials()
+            logger.debug(
+                f"[{request_id}] Using centrally managed credentials. Project: {project_id}, Location: {location}"
+            )
         except AuthenticationError as e:
-            logger.error(f"[{request_id}] Custom Authentication Failed: {e}")
+            logger.error(f"[{request_id}] Credential manager failed to provide credentials: {e}")
             raise HTTPException(status_code=503, detail=f"Authentication Service Error: {e}")
         except Exception as e:
-            logger.error(f"[{request_id}] Unexpected error during authentication thread: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Unexpected authentication error")
-
-        # --- Initialize Vertex AI SDK (Per-Request) ---
-        try:
-            await asyncio.to_thread(vertexai.init, project=project_id, location=location, credentials=temp_creds)
-            logger.info(f"[{request_id}] Vertex AI SDK initialized successfully for this request.")
-        except google.auth.exceptions.GoogleAuthError as e:
-            logger.error(f"[{request_id}] Vertex AI SDK Initialization Failed (Auth Error): {e}", exc_info=True)
-            raise HTTPException(status_code=401, detail=f"Vertex SDK Auth Init Error (Invalid Credentials?): {e}")
-        except Exception as e:
-            logger.error(f"[{request_id}] Vertex AI SDK Initialization Failed (Unexpected): {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Vertex SDK Init Error: {e}")
+            logger.error(f"[{request_id}] Unexpected error getting credentials: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Unexpected credential error")
 
         # --- Convert Anthropic Request -> Intermediate LiteLLM/OpenAI Format ---
         litellm_request_dict = convert_anthropic_to_litellm(request_data)
@@ -376,10 +395,14 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
 
     # --- General Exception Handling ---
     except HTTPException as e:
+        # Always use the consistent request ID from middleware
         logger.error(
             f"[{request_id}] HTTPException during '/v1/messages': Status={e.status_code}, Detail={e.detail}",
             exc_info=(e.status_code >= 500),
         )
+        # Add request_id to exception detail for traceability
+        if not str(e.detail).startswith(f"[{request_id}]"):
+            e.detail = f"[{request_id}] {e.detail}"
         raise e
     except Exception as e:
         logger.critical(
@@ -416,18 +439,16 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
         pipeline as the main completion endpoint to ensure consistency. In extremely rare cases
         where token counting fails, it falls back to a simple character-based estimation.
     """
-    request_id = f"tok_{uuid.uuid4().hex[:12]}"
+    # Use request ID from middleware
+    request_id = raw_request.state.request_id
     start_time = time.time()
     token_count = 0  # Default
     status_code = 200  # Assume success initially
 
-    # --- Request Parsing and Model Mapping ---
-    try:
-        raw_body = await raw_request.body()
-        original_model_name = json.loads(raw_body.decode()).get("model", "unknown-request-body")
-    except Exception:
-        original_model_name = request_data.original_model_name or "unknown-fallback"
-    request_data.original_model_name = original_model_name
+    # --- Use Validated Request Data ---
+    # We now get everything directly from the Pydantic model which has been validated
+    # No need to parse the raw request body again
+    original_model_name = request_data.original_model_name
     actual_gemini_model_id = request_data.model  # Contains mapped ID
 
     logger.info(
@@ -435,25 +456,20 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
     )
 
     try:
-        # --- Custom Auth + Vertex Init (Required for SDK count_tokens) ---
-        project_id, location, temp_creds = None, None, None
+        # --- Get credentials from central credential manager ---
         try:
-            project_id, location, temp_creds = await asyncio.to_thread(get_gemini_credentials)
-            logger.info(f"[{request_id}] Auth successful for token count.")
-            await asyncio.to_thread(vertexai.init, project=project_id, location=location, credentials=temp_creds)
-            logger.info(f"[{request_id}] Vertex AI SDK initialized for token count.")
+            project_id, location, temp_creds = await credential_manager.get_credentials()
+            logger.debug(
+                f"[{request_id}] Using centrally managed credentials for token count. Project: {project_id}, Location: {location}"
+            )
         except AuthenticationError as e:
-            logger.error(f"[{request_id}] Auth Failed for token count: {e}")
+            logger.error(f"[{request_id}] Credential manager failed to provide credentials for token count: {e}")
             status_code = 503
             raise HTTPException(status_code=status_code, detail=f"Authentication Service Error: {e}")
-        except google.auth.exceptions.GoogleAuthError as e:
-            logger.error(f"[{request_id}] Vertex SDK Init Failed for token count (Auth Error): {e}", exc_info=True)
-            status_code = 401
-            raise HTTPException(status_code=status_code, detail=f"Vertex SDK Auth Init Error: {e}")
         except Exception as e:
-            logger.error(f"[{request_id}] Error during Auth/Init for token count: {e}", exc_info=True)
+            logger.error(f"[{request_id}] Unexpected error getting credentials for token count: {e}", exc_info=True)
             status_code = 500
-            raise HTTPException(status_code=status_code, detail=f"Auth/Init Error: {e}")
+            raise HTTPException(status_code=status_code, detail=f"Credential Error: {e}")
 
         # --- Convert messages for counting (using intermediate format) ---
         # Need to simulate a MessagesRequest for the conversion function
@@ -471,6 +487,7 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
         vertex_system_instruction = Part.from_text(system_prompt_text) if system_prompt_text else None
 
         # --- Call SDK count_tokens ---
+        # SDK is already initialized by the credential manager, no need to re-initialize
         model = GenerativeModel(
             actual_gemini_model_id, system_instruction=vertex_system_instruction  # Pass system prompt here too
         )
@@ -500,14 +517,21 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
         log_request_beautifully(
             raw_request.method, raw_request.url.path, original_model_name, actual_gemini_model_id, 0, 0, status_code
         )
-        raise HTTPException(status_code=status_code, detail=f"Upstream count_tokens error: {e.message or str(e)}")
+        raise HTTPException(
+            status_code=status_code, detail=f"[{request_id}] Upstream count_tokens error: {e.message or str(e)}"
+        )
     except HTTPException as e:
         # Log and re-raise if auth/init failed
         log_request_beautifully(
             raw_request.method, raw_request.url.path, original_model_name, actual_gemini_model_id, 0, 0, e.status_code
         )
+        # Add request_id to exception detail for traceability
+        if not str(e.detail).startswith(f"[{request_id}]"):
+            e.detail = f"[{request_id}] {e.detail}"
         raise e
     except Exception as e:  # Fallback to basic estimation for truly unexpected errors
+        # TODO: This fallback character-based token estimation will be removed in Task 5
+        # and replaced with proper error propagation
         logger.error(
             f"[{request_id}] Unexpected error during token counting, falling back to estimation: {e}", exc_info=True
         )
@@ -516,7 +540,7 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
             system_text_fallback = (
                 request_data.system
                 if isinstance(request_data.system, str)
-                else "\n".join([b.text for b in request_data.system if hasattr(b, "type") and b.type == "text"])
+                else "\n".join([b.text for b in request_data.system if b.type == "text"])
             )
             prompt_text += system_text_fallback + "\n"
         for msg in request_data.messages:
@@ -524,9 +548,7 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
             if isinstance(msg.content, str):
                 msg_content_fallback = msg.content
             elif isinstance(msg.content, list):
-                msg_content_fallback = "\n".join(
-                    [b.text for b in msg.content if hasattr(b, "type") and b.type == "text"]
-                )
+                msg_content_fallback = "\n".join([b.text for b in msg.content if b.type == "text"])
             prompt_text += msg_content_fallback + "\n"
 
         token_estimate = len(prompt_text) // 4  # Rough estimate
@@ -541,8 +563,13 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
             0,
             status_code,
         )
+        # Note: This entire token estimation fallback will be removed in Task 5
+        # and replaced with proper error propagation
         return JSONResponse(
-            content={"input_tokens": token_estimate},
+            content={
+                "input_tokens": token_estimate,
+                "note": f"[{request_id}] Token count is an estimate due to upstream error",
+            },
             headers={
                 "X-Mapped-Model": actual_gemini_model_id,
                 "X-Request-ID": request_id,
@@ -563,16 +590,35 @@ async def root():
     - Service status
     - Target Gemini model configurations
     - Library versions in use
+    - Credential manager status
 
     Returns:
         dict: Service information dictionary with status and configuration details
     """
+    # Check if credential manager has been initialized
+    cred_status = "initialized" if credential_manager._initialized_event.is_set() else "initializing"
+    cred_expiry = "unknown"
+
+    # Get expiry time if available
+    if credential_manager._expiry_time:
+        expiry_time = credential_manager._expiry_time
+        now = time.time()
+        if expiry_time > now:
+            cred_expiry = f"valid for {int((expiry_time - now) / 60)} minutes"
+        else:
+            cred_expiry = "expired (refresh pending)"
+
     return {
         "message": "Anthropic API Compatible Proxy using Native Vertex AI SDK with Custom Gemini Auth",
         "status": "running",
         "target_gemini_models": {"BIG": GEMINI_BIG_MODEL, "SMALL": GEMINI_SMALL_MODEL},
-        "litellm_version": getattr(litellm, "__version__", "unknown"),  # Still useful info
+        "litellm_version": getattr(litellm, "__version__", "unknown"),
         "vertexai_version": getattr(vertexai, "__version__", "unknown"),
+        "credential_manager": {
+            "status": cred_status,
+            "token_expiry": cred_expiry,
+            "centralized_auth": True,
+        },
     }
 
 
@@ -580,20 +626,31 @@ async def root():
 async def log_requests_middleware(request: Request, call_next):
     start_time = time.time()
     client_host = request.client.host if request.client else "unknown"
-    request_id = request.headers.get("X-Request-ID") or f"mw_{uuid.uuid4().hex[:12]}"  # Get or generate ID
+
+    # Get request ID from header or generate a new one with more descriptive prefix
+    path = request.url.path
+    prefix = "req_"
+    if "/count_tokens" in path:
+        prefix = "tok_"
+    elif "/" == path:  # Root endpoint
+        prefix = "inf_"  # info request
+
+    request_id = request.headers.get("X-Request-ID") or f"{prefix}{uuid.uuid4().hex[:12]}"
 
     # Log incoming request with ID
     logger.info(f"[{request_id}] Incoming request: {request.method} {request.url.path} from {client_host}")
     logger.debug(f"[{request_id}] Request Headers: {dict(request.headers)}")
 
-    # Add request ID to request state for access in endpoints if needed
+    # Store request ID in request state for access in endpoints
     request.state.request_id = request_id
 
     try:
         response = await call_next(request)
         process_time = time.time() - start_time
-        # Add request ID to response header
-        response.headers["X-Request-ID"] = request_id
+
+        # Ensure request ID is in response header
+        if "X-Request-ID" not in response.headers:
+            response.headers["X-Request-ID"] = request_id
 
         # Log outgoing response with ID
         response_log_detail = f"status={response.status_code}, time={process_time:.3f}s"

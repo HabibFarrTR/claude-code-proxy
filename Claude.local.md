@@ -1,6 +1,6 @@
 ## Phase 1: Foundational Refactoring & Critical Tool Fixes
 
-### Task 1: Refactor Authentication & SDK Initialization
+### Task 1: Refactor Authentication & SDK Initialization - Completed
 - Goal: Improve performance and stability by initializing the Vertex AI SDK once at startup and managing credentials centrally.
 - Actions:
   - Modify src/authenticator.py: Create a class or mechanism to fetch and refresh credentials periodically in the background (using
@@ -49,7 +49,7 @@ refusing to call).
 ## Phase 2: Improving Robustness & Maintainability
 
 
-### Task 4: Refactor Request ID Handling & Body Parsing
+### Task 4: Refactor Request ID Handling & Body Parsing  - Completed
 - Goal: Standardize request ID tracking and eliminate redundant request body parsing.
 - Actions:
   - Modify src/server.py:
