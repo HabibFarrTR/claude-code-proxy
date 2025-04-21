@@ -29,7 +29,6 @@ from contextlib import asynccontextmanager
 
 import google.api_core.exceptions  # To catch API call errors
 import google.auth  # To catch auth errors during vertexai.init
-import litellm  # Still used for format definitions, fallback token counting
 import uvicorn
 import vertexai
 from fastapi import FastAPI, HTTPException, Request
@@ -58,13 +57,13 @@ from src.config import (
     TOOL_CALL_TEMPERATURE_OVERRIDE,
 )
 from src.converters import (
-    adapt_vertex_stream_to_litellm,
-    convert_anthropic_to_litellm,
-    convert_litellm_messages_to_vertex_content,
-    convert_litellm_to_anthropic,
-    convert_litellm_to_anthropic_sse,
-    convert_litellm_tools_to_vertex_tools,
-    convert_vertex_response_to_litellm,
+    adapt_vertex_stream_to_openai,
+    convert_anthropic_to_openai,
+    convert_openai_messages_to_vertex_content,
+    convert_openai_to_anthropic,
+    convert_openai_to_anthropic_sse,
+    convert_openai_tools_to_vertex_tools,
+    convert_vertex_response_to_openai,
 )
 from src.models import MessagesRequest, TokenCountRequest, TokenCountResponse
 from src.utils import (
@@ -77,10 +76,6 @@ from src.utils import (
 
 logger = get_logger()
 
-
-# Disable LiteLLM's default logging behavior
-litellm.success_callback = []
-litellm.failure_callback = []
 
 # Configure uvicorn and other libraries to be quieter
 logging.getLogger("uvicorn").setLevel(logging.WARNING)
@@ -185,15 +180,15 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             logger.error(f"[{request_id}] Unexpected error getting credentials: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Unexpected credential error")
 
-        # --- Convert Anthropic Request -> Intermediate LiteLLM/OpenAI Format ---
-        litellm_request_dict = convert_anthropic_to_litellm(request_data)
-        litellm_messages = litellm_request_dict.get("messages", [])
-        litellm_tools = litellm_request_dict.get("tools")  # Tools in OpenAI format
-        system_prompt_text = litellm_request_dict.get("system_prompt")  # Extracted system prompt
+        # --- Convert Anthropic Request -> Intermediate OpenAI Format ---
+        openai_request_dict = convert_anthropic_to_openai(request_data)
+        openai_messages = openai_request_dict.get("messages", [])
+        openai_tools = openai_request_dict.get("tools")  # Tools in OpenAI format
+        system_prompt_text = openai_request_dict.get("system_prompt")  # Extracted system prompt
 
         # --- Convert Intermediate Format -> Vertex AI SDK Format ---
-        vertex_history = convert_litellm_messages_to_vertex_content(litellm_messages)
-        vertex_tools = convert_litellm_tools_to_vertex_tools(litellm_tools)  # Will be None if no tools
+        vertex_history = convert_openai_messages_to_vertex_content(openai_messages)
+        vertex_tools = convert_openai_tools_to_vertex_tools(openai_tools)  # Will be None if no tools
         vertex_system_instruction = Part.from_text(system_prompt_text) if system_prompt_text else None
 
         # --- Prepare Generation Config for Vertex AI ---
@@ -241,7 +236,7 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
         safety_settings = None
 
         # --- Tool Config ---
-        intermediate_tool_choice = litellm_request_dict.get("tool_choice")
+        intermediate_tool_choice = openai_request_dict.get("tool_choice")
         if intermediate_tool_choice == "none":
             if vertex_tools:
                 logger.warning(f"[{request_id}] Tool choice is 'none', but tools were provided. Ignoring tools.")
@@ -327,8 +322,8 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                     status_code=http_status, detail=f"Upstream API Error (Streaming): {e.message or str(e)}"
                 )
 
-            adapted_stream = adapt_vertex_stream_to_litellm(vertex_stream_generator, request_id, actual_gemini_model_id)
-            logger.debug(f"[{request_id}] Vertex AI stream successfully adapted to LiteLLM format")
+            adapted_stream = adapt_vertex_stream_to_openai(vertex_stream_generator, request_id, actual_gemini_model_id)
+            logger.debug(f"[{request_id}] Vertex AI stream successfully adapted to OpenAI format")
             headers = {
                 "Content-Type": "text/event-stream",
                 "Cache-Control": "no-cache",
@@ -337,7 +332,7 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                 "X-Request-ID": request_id,
             }
             return StreamingResponse(
-                convert_litellm_to_anthropic_sse(adapted_stream, request_data, request_id),
+                convert_openai_to_anthropic_sse(adapted_stream, request_data, request_id),
                 media_type="text/event-stream",
                 headers=headers,
             )
@@ -463,17 +458,17 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                 )
                 raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-            # --- Convert Vertex AI Response -> Intermediate LiteLLM/OpenAI Format ---
-            litellm_like_response = convert_vertex_response_to_litellm(
+            # --- Convert Vertex AI Response -> Intermediate OpenAI Format ---
+            openai_like_response = convert_vertex_response_to_openai(
                 vertex_response, actual_gemini_model_id, request_id
             )
-            logger.debug(f"[{request_id}] LiteLLM-like response: {smart_format_str(litellm_like_response)}")
+            logger.debug(f"[{request_id}] OpenAI-like response: {smart_format_str(openai_like_response)}")
 
             # Log the original model name being passed to ensure it's not None
             logger.debug(f"[{request_id}] Original model name for final conversion: '{original_model_name}'")
 
             # --- Convert Intermediate Format -> Final Anthropic Format ---
-            anthropic_response = convert_litellm_to_anthropic(litellm_like_response, original_model_name)
+            anthropic_response = convert_openai_to_anthropic(openai_like_response, original_model_name)
             if anthropic_response:
                 logger.debug(
                     f"[{request_id}] Final Anthropic response: {smart_format_str(anthropic_response.model_dump())}"
@@ -576,11 +571,11 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
             system=request_data.system,
             max_tokens=1,  # Dummy value, not used by conversion
         )
-        litellm_request_dict = convert_anthropic_to_litellm(simulated_msg_request)
-        litellm_messages_for_count = litellm_request_dict.get("messages", [])
-        system_prompt_text = litellm_request_dict.get("system_prompt")
+        openai_request_dict = convert_anthropic_to_openai(simulated_msg_request)
+        openai_messages_for_count = openai_request_dict.get("messages", [])
+        system_prompt_text = openai_request_dict.get("system_prompt")
 
-        vertex_history = convert_litellm_messages_to_vertex_content(litellm_messages_for_count)
+        vertex_history = convert_openai_messages_to_vertex_content(openai_messages_for_count)
         vertex_system_instruction = Part.from_text(system_prompt_text) if system_prompt_text else None
 
         # --- Call SDK count_tokens ---
@@ -677,7 +672,6 @@ async def root():
         "message": "Anthropic API Compatible Proxy using Native Vertex AI SDK with Custom Gemini Auth",
         "status": "running",
         "target_gemini_models": {"BIG": GEMINI_BIG_MODEL, "SMALL": GEMINI_SMALL_MODEL},
-        "litellm_version": getattr(litellm, "__version__", "unknown"),
         "vertexai_version": getattr(vertexai, "__version__", "unknown"),
         "credential_manager": {
             "status": cred_status,
@@ -780,7 +774,6 @@ if __name__ == "__main__":
     print(f" Auto-Reload:  {reload_flag}")
     print(f" Target Models: BIG='{GEMINI_BIG_MODEL}', SMALL='{GEMINI_SMALL_MODEL}'")
     print(f" Tool Temp Override: {TOOL_CALL_TEMPERATURE_OVERRIDE}")
-    print(f" LiteLLM Ver:  {getattr(litellm, '__version__', 'unknown')}")
     print(f" VertexAI Ver: {getattr(vertexai, '__version__', 'unknown')}")
     if not os.getenv("WORKSPACE_ID") or not os.getenv("AUTH_URL"):
         print(

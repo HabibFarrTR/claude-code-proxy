@@ -2,8 +2,8 @@ import pytest
 
 from src.converters import (
     clean_gemini_schema,
-    convert_anthropic_to_litellm,
-    convert_litellm_tools_to_vertex_tools,
+    convert_anthropic_to_openai,
+    convert_openai_tools_to_vertex_tools,
 )
 from src.models import MessagesRequest, ToolDefinition, ToolInputSchema
 
@@ -161,18 +161,18 @@ def test_batch_tool_schema_cleaning():
         ],
     )
 
-    # Convert to LiteLLM format (this will run clean_gemini_schema internally)
-    litellm_format = convert_anthropic_to_litellm(anthropic_request)
+    # Convert to OpenAI format (this will run clean_gemini_schema internally)
+    openAI_format = convert_anthropic_to_openai(anthropic_request)
 
     # Extract the cleaned BatchTool schema
-    batch_tool_litellm = next(
-        (tool for tool in litellm_format.get("tools", []) if tool.get("function", {}).get("name") == "BatchTool"), None
+    batch_tool_openai = next(
+        (tool for tool in openAI_format.get("tools", []) if tool.get("function", {}).get("name") == "BatchTool"), None
     )
 
-    assert batch_tool_litellm is not None, "BatchTool not found in converted tools"
+    assert batch_tool_openai is not None, "BatchTool not found in converted tools"
 
     # Check the schema for invocations.items.properties.input
-    params = batch_tool_litellm["function"]["parameters"]
+    params = batch_tool_openai["function"]["parameters"]
     invocations = params["properties"]["invocations"]
     items = invocations["items"]
     input_schema = items["properties"]["input"]
@@ -188,7 +188,7 @@ def test_batch_tool_schema_cleaning():
 
     # Now try converting to Vertex Tools to verify it works without errors
     try:
-        vertex_tools = convert_litellm_tools_to_vertex_tools([batch_tool_litellm])
+        vertex_tools = convert_openai_tools_to_vertex_tools([batch_tool_openai])
         assert vertex_tools is not None, "Failed to convert BatchTool to Vertex Tool"
         assert len(vertex_tools) == 1, "Should have exactly one Vertex Tool"
 

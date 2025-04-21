@@ -3,7 +3,7 @@
 Provides conversion functions to translate between:
 - Anthropic Claude API format (requests and responses)
 - Vertex AI Gemini API format (requests and responses)
-- Intermediate LiteLLM/OpenAI format used for simplifying conversion process
+- Intermediate OpenAI format used for simplifying conversion process
 
 Handles both streaming and non-streaming responses with special attention to:
 - Tool/function calling format differences
@@ -44,10 +44,10 @@ from src.utils import (
 logger = get_logger()
 
 
-def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
-    """Convert Anthropic API request to intermediate LiteLLM/OpenAI format.
+def convert_anthropic_to_openai(request: MessagesRequest) -> Dict[str, Any]:
+    """Convert Anthropic API request to intermediate OpenAI format.
 
-    Transforms Anthropic's message-based format into an OpenAI-like format that's
+    Transforms Anthropic's message-based format into an OpenAI format that's
     easier to process before final conversion to Vertex AI. Handles system messages,
     content blocks, tool calls/results, and various parameter conversions.
 
@@ -57,7 +57,7 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Request in OpenAI-compatible format with mapped parameters
     """
-    litellm_messages = []
+    openai_messages = []
 
     # Handle System Prompt -> Becomes a separate parameter for Gemini SDK
     system_text = None
@@ -109,7 +109,7 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
                 elif block.type == "tool_result" and msg.role == "user":
                     # If previous user text exists, send it first
                     if content_list:
-                        litellm_messages.append({"role": "user", "content": content_list})
+                        openai_messages.append({"role": "user", "content": content_list})
                         content_list = []  # Reset content list
 
                     # Convert Anthropic tool_result to OpenAI tool message format
@@ -121,60 +121,58 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
                         except Exception:
                             tool_content = str(tool_content)  # Fallback to string representation
 
-                    litellm_messages.append(
-                        {"role": "tool", "tool_call_id": block.tool_use_id, "content": tool_content}
-                    )
+                    openai_messages.append({"role": "tool", "tool_call_id": block.tool_use_id, "content": tool_content})
                     logger.debug(f"User tool_result for '{block.tool_use_id}' converted to intermediate tool message.")
                     is_tool_response_message = True
                     break  # Process only the tool result block for this message
 
         # Add the assembled message if it wasn't a tool response handled above
         if not is_tool_response_message:
-            litellm_msg = {"role": msg.role}
+            openai_message = {"role": msg.role}
             # Simplify content if only text
             if len(content_list) == 1 and content_list[0]["type"] == "text":
-                litellm_msg["content"] = content_list[0]["text"]
+                openai_message["content"] = content_list[0]["text"]
             elif content_list:  # Keep as list for multimodal
-                litellm_msg["content"] = content_list
+                openai_message["content"] = content_list
             else:
-                litellm_msg["content"] = None  # Or empty string ""? Let's use None for clarity
+                openai_message["content"] = None  # Or empty string ""? Let's use None for clarity
 
             # Add tool calls if any (for assistant messages)
             if tool_calls_list:
-                litellm_msg["tool_calls"] = tool_calls_list
+                openai_message["tool_calls"] = tool_calls_list
 
             # Only add message if it has content or tool calls
-            if litellm_msg.get("content") is not None or litellm_msg.get("tool_calls"):
-                litellm_messages.append(litellm_msg)
-            elif msg.role == "assistant" and not litellm_msg.get("content") and not litellm_msg.get("tool_calls"):
+            if openai_message.get("content") is not None or openai_message.get("tool_calls"):
+                openai_messages.append(openai_message)
+            elif msg.role == "assistant" and not openai_message.get("content") and not openai_message.get("tool_calls"):
                 # Handle case where assistant message might be empty (e.g., after tool call)
                 # OpenAI format expects content: null or content: ""
-                litellm_msg["content"] = ""
-                litellm_messages.append(litellm_msg)
+                openai_message["content"] = ""
+                openai_messages.append(openai_message)
 
-    # --- Assemble LiteLLM/OpenAI Request Dictionary ---
+    # --- Assemble OpenAI Request Dictionary ---
     # Note: request.model already contains the *mapped* Gemini ID from the validator
-    litellm_request = {
+    openai_request = {
         "model": request.model,  # Mapped Gemini ID
-        "messages": litellm_messages,
+        "messages": openai_messages,
         "max_tokens": request.max_tokens,
         "stream": request.stream or False,
     }
     # Add optional parameters
     if request.temperature is not None:
-        litellm_request["temperature"] = request.temperature
+        openai_request["temperature"] = request.temperature
     if request.top_p is not None:
-        litellm_request["top_p"] = request.top_p
+        openai_request["top_p"] = request.top_p
     if request.top_k is not None:
-        litellm_request["top_k"] = request.top_k
+        openai_request["top_k"] = request.top_k
     if request.stop_sequences:
-        litellm_request["stop"] = request.stop_sequences  # For GenerationConfig later
+        openai_request["stop"] = request.stop_sequences  # For GenerationConfig later
     if request.metadata:
-        litellm_request["metadata"] = request.metadata  # Keep metadata if needed downstream
+        openai_request["metadata"] = request.metadata  # Keep metadata if needed downstream
 
     # Store system text separately in the dict for easy access later
     if system_text:
-        litellm_request["system_prompt"] = system_text
+        openai_request["system_prompt"] = system_text
 
     # Convert Anthropic Tools to OpenAI Tool Format (and clean schema)
     if request.tools:
@@ -206,7 +204,7 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
                 }
             )
         if openai_tools:
-            litellm_request["tools"] = openai_tools
+            openai_request["tools"] = openai_tools
             logger.debug(f"Converted {len(openai_tools)} tools to intermediate OpenAI format.")
 
     # Convert Anthropic Tool Choice to OpenAI Tool Choice Format
@@ -214,18 +212,16 @@ def convert_anthropic_to_litellm(request: MessagesRequest) -> Dict[str, Any]:
     if request.tool_choice:
         choice_type = request.tool_choice.get("type")
         if choice_type == "any" or choice_type == "auto":
-            litellm_request["tool_choice"] = "auto"  # Map to OpenAI 'auto'
+            openai_request["tool_choice"] = "auto"  # Map to OpenAI 'auto'
         elif choice_type == "tool" and "name" in request.tool_choice:
             # Map to OpenAI specific function choice
-            litellm_request["tool_choice"] = {"type": "function", "function": {"name": request.tool_choice["name"]}}
+            openai_request["tool_choice"] = {"type": "function", "function": {"name": request.tool_choice["name"]}}
         else:  # Includes 'none' or other types
-            litellm_request["tool_choice"] = "none"  # Map to OpenAI 'none'
-        logger.debug(
-            f"Converted tool_choice '{choice_type}' to intermediate format '{litellm_request['tool_choice']}'."
-        )
+            openai_request["tool_choice"] = "none"  # Map to OpenAI 'none'
+        logger.debug(f"Converted tool_choice '{choice_type}' to intermediate format '{openai_request['tool_choice']}'.")
 
-    logger.debug(f"Intermediate LiteLLM/OpenAI Request Prepared: {smart_format_str(litellm_request)}")
-    return litellm_request
+    logger.debug(f"Intermediate OpenAI Request Prepared: {smart_format_str(openai_request)}")
+    return openai_request
 
 
 def clean_gemini_schema(schema: Any) -> Any:
@@ -324,7 +320,7 @@ def clean_gemini_schema(schema: Any) -> Any:
     return schema
 
 
-def convert_litellm_tools_to_vertex_tools(litellm_tools: Optional[List[Dict]]) -> Optional[List[Tool]]:
+def convert_openai_tools_to_vertex_tools(openai_tools: Optional[List[Dict]]) -> Optional[List[Tool]]:
     """
     Convert OpenAI-format tools to Vertex AI SDK Tool objects.
 
@@ -333,18 +329,18 @@ def convert_litellm_tools_to_vertex_tools(litellm_tools: Optional[List[Dict]]) -
     expects a single Tool object containing multiple function declarations.
 
     Args:
-        litellm_tools: List of tools in OpenAI format from intermediate conversion
+        openai_tools: List of tools in OpenAI format from intermediate conversion
 
     Returns:
         Optional[List[Tool]]: A list containing a single Tool with all function
             declarations, or None if no valid tools
     """
-    if not litellm_tools:
+    if not openai_tools:
         return None
 
     all_function_declarations: List[FunctionDeclaration] = []  # Collect declarations here
 
-    for tool in litellm_tools:
+    for tool in openai_tools:
         if tool.get("type") == "function":
             func_data = tool.get("function", {})
             name = func_data.get("name")
@@ -388,7 +384,7 @@ def convert_litellm_tools_to_vertex_tools(litellm_tools: Optional[List[Dict]]) -
         return None
 
 
-def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> List[Content]:
+def convert_openai_messages_to_vertex_content(openai_messages: List[Dict]) -> List[Content]:
     """
     Convert OpenAI-format messages to Vertex AI content objects.
 
@@ -404,7 +400,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
     creation and merging.
 
     Args:
-        litellm_messages: List of message objects in OpenAI format
+        openai_messages: List of message objects in OpenAI format
 
     Returns:
         List[Content]: Vertex AI content objects representing the conversation history
@@ -412,7 +408,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
     vertex_content_list: List[Content] = []
     request_id_for_logging = "conv_test"  # Placeholder for logging context
 
-    for i, msg in enumerate(litellm_messages):
+    for i, msg in enumerate(openai_messages):
         role = msg.get("role")
         intermediate_content = msg.get("content")  # Content from OpenAI-like format
         tool_calls = msg.get("tool_calls")  # OpenAI format tool_calls
@@ -474,7 +470,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
 
                 original_func_name = "unknown_function"
                 for j in range(i - 1, -1, -1):
-                    prev_msg = litellm_messages[j]
+                    prev_msg = openai_messages[j]
                     if prev_msg.get("role") == "assistant" and prev_msg.get("tool_calls"):
                         for tc in prev_msg["tool_calls"]:
                             if tc.get("id") == tool_call_id:
@@ -677,7 +673,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
     # --- Final Logging ---
     # (Logging remains the same as v2/v3)
     logger.info(
-        f"[{request_id_for_logging}] Converted {len(litellm_messages)} intermediate messages -> {len(vertex_content_list)} Vertex Content objects."
+        f"[{request_id_for_logging}] Converted {len(openai_messages)} intermediate messages -> {len(vertex_content_list)} Vertex Content objects."
     )
     try:
         final_history_repr = []
@@ -711,7 +707,7 @@ def convert_litellm_messages_to_vertex_content(litellm_messages: List[Dict]) -> 
     return vertex_content_list
 
 
-def convert_litellm_to_anthropic(
+def convert_openai_to_anthropic(
     response_chunk: Union[Dict, Any], original_model_name: Optional[str] = None
 ) -> Optional[MessagesResponse]:
     """Convert OpenAI-format response to Anthropic API response format.
@@ -728,7 +724,7 @@ def convert_litellm_to_anthropic(
         Optional[MessagesResponse]: Response in Anthropic format, or None if conversion fails
     """
     request_id = response_chunk.get("request_id", "unknown")  # Get request ID if passed through
-    logger.info(f"[{request_id}] Converting adapted LiteLLM/OpenAI response to Anthropic MessagesResponse format.")
+    logger.info(f"[{request_id}] Converting adapted OpenAI response to Anthropic MessagesResponse format.")
     try:
         # Ensure input is a dictionary
         resp_dict = {}
@@ -837,7 +833,7 @@ def convert_litellm_to_anthropic(
     except Exception as e:
         # Log detailed error during conversion
         logger.error(
-            f"[{request_id}] Failed to convert adapted LiteLLM/OpenAI response to Anthropic format: {e}", exc_info=True
+            f"[{request_id}] Failed to convert adapted OpenAI response to Anthropic format: {e}", exc_info=True
         )
         # Return a minimal error response in Anthropic format
         # Ensure we have a valid model name here too
@@ -854,7 +850,7 @@ def convert_litellm_to_anthropic(
         )
 
 
-async def convert_litellm_to_anthropic_sse(
+async def convert_openai_to_anthropic_sse(
     response_generator: AsyncGenerator[Dict[str, Any], None], request: MessagesRequest, request_id: str
 ):
     """Convert OpenAI streaming format to Anthropic Server-Sent Events (SSE) format.
@@ -924,7 +920,7 @@ async def convert_litellm_to_anthropic_sse(
 
     try:
         async for chunk in response_generator:
-            logger.debug(f"[{request_id}] Processing adapted LiteLLM/OpenAI Chunk: {chunk}")
+            logger.debug(f"[{request_id}] Processing adapted OpenAI Chunk: {chunk}")
 
             # Safety check for chunk format
             if not isinstance(chunk, dict):
@@ -1185,7 +1181,7 @@ async def convert_litellm_to_anthropic_sse(
         # yield "data: [DONE]\n\n"
 
 
-async def adapt_vertex_stream_to_litellm(
+async def adapt_vertex_stream_to_openai(
     vertex_stream: AsyncGenerator[GenerationResponse, None], request_id: str, model_id_for_chunk: str
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Adapt Vertex AI streaming responses to OpenAI streaming format.
@@ -1314,7 +1310,7 @@ async def adapt_vertex_stream_to_litellm(
                                 f"[{request_id}] Unexpected error processing part {part_index}: {e}", exc_info=True
                             )
 
-            # --- Construct and Yield the LiteLLM/OpenAI Delta Chunk ---
+            # --- Construct and Yield the OpenAI Delta Chunk ---
             # Only yield if we have content/tool calls OR if it's the final chunk with usage/finish reason
             openai_delta_for_choice = {}
             if delta_content is not None:
@@ -1327,7 +1323,7 @@ async def adapt_vertex_stream_to_litellm(
 
             # Yield chunk if it contains actual delta content or tool calls
             if openai_delta_for_choice:
-                litellm_chunk = {
+                openai_chunk = {
                     "id": f"chatcmpl-adap-{request_id}",
                     "object": "chat.completion.chunk",
                     "created": int(time.time()),
@@ -1337,8 +1333,8 @@ async def adapt_vertex_stream_to_litellm(
                     ],
                     "usage": None,  # Usage usually comes in the final chunk
                 }
-                logger.debug(f"[{request_id}] Yielding adapted LiteLLM chunk: {smart_format_str(litellm_chunk)}")
-                yield litellm_chunk
+                logger.debug(f"[{request_id}] Yielding adapted OpenAI chunk: {smart_format_str(openai_chunk)}")
+                yield openai_chunk
 
             # --- Check if this chunk signals the end (either normally or via malformed call) ---
             if vertex_finish_reason_enum:
@@ -1416,7 +1412,7 @@ async def adapt_vertex_stream_to_litellm(
                     )
 
                 # Construct the final chunk
-                final_litellm_chunk = {
+                final_openai_chunk = {
                     "id": f"chatcmpl-adap-{request_id}",
                     "object": "chat.completion.chunk",
                     "created": int(time.time()),
@@ -1433,9 +1429,9 @@ async def adapt_vertex_stream_to_litellm(
                     "usage": usage_metadata,  # Include usage if available
                 }
                 logger.debug(
-                    f"[{request_id}] Yielding final adapted LiteLLM chunk with finish_reason: {smart_format_str(final_litellm_chunk)}"
+                    f"[{request_id}] Yielding final adapted OpenAI chunk with finish_reason: {smart_format_str(final_openai_chunk)}"
                 )
-                yield final_litellm_chunk
+                yield final_openai_chunk
                 break  # Stop iteration after the final chunk
 
     except Exception as e:
@@ -1460,7 +1456,7 @@ async def adapt_vertex_stream_to_litellm(
         logger.info(f"[{request_id}] Vertex AI stream adaptation finished.")
 
 
-def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: str, request_id: str) -> Dict[str, Any]:
+def convert_vertex_response_to_openai(response: GenerationResponse, model_id: str, request_id: str) -> Dict[str, Any]:
     """Convert Vertex AI response to OpenAI format response.
 
     Transforms a completed (non-streaming) Vertex AI response to the OpenAI format,
@@ -1475,7 +1471,7 @@ def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: s
     Returns:
         Dict[str, Any]: Response formatted in OpenAI-compatible structure
     """
-    logger.info(f"[{request_id}] Converting Vertex non-streaming response to LiteLLM/OpenAI format.")
+    logger.info(f"[{request_id}] Converting Vertex non-streaming response to OpenAI format.")
     output_text = ""
     tool_calls = []  # List for OpenAI tool_calls structure
     finish_reason_str = "stop"  # Default
@@ -1560,7 +1556,7 @@ def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: s
             f"[{request_id}] Extracted non-streaming usage: In={prompt_tokens}, Out={completion_tokens}, Total={total_tokens}"
         )
 
-    # --- Construct the LiteLLM/OpenAI-like Message ---
+    # --- Construct the OpenAI-like Message ---
     message_content = {"role": "assistant"}
     if output_text:
         message_content["content"] = output_text
@@ -1579,8 +1575,8 @@ def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: s
             f"[{request_id}] Non-streaming response has no text and no tool calls. Message content set to empty string."
         )
 
-    # --- Construct the Final LiteLLM/OpenAI-like Response Dict ---
-    litellm_response = {
+    # --- Construct the Final OpenAI-like Response Dict ---
+    openai_response = {
         "id": f"chatcmpl-vert-{request_id}",
         "object": "chat.completion",
         "created": int(time.time()),
@@ -1590,6 +1586,6 @@ def convert_vertex_response_to_litellm(response: GenerationResponse, model_id: s
         "request_id": request_id,
     }
     logger.debug(
-        f"[{request_id}] Converted non-streaming Vertex response to LiteLLM/OpenAI format: {smart_format_str(litellm_response)}"
+        f"[{request_id}] Converted non-streaming Vertex response to OpenAI format: {smart_format_str(openai_response)}"
     )
-    return litellm_response
+    return openai_response
