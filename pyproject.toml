@@ -30,6 +30,7 @@ pytest = "^7.4.0"
 pytest-asyncio = "^0.21.1"
 mypy = "^1.15.0"
 trlabs-mltools-cli = "4.0.0"
+rich = "^14.0.0"
 
 [tool.poetry.scripts]
 start = "uvicorn:run"

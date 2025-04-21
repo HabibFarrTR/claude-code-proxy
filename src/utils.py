@@ -6,6 +6,9 @@ Provides central logging configuration, color formatting, and request visualizat
 import logging
 import sys
 from pathlib import Path
+from typing import Dict, List, Union
+
+from rich.pretty import pretty_repr
 
 
 class Colors:
@@ -56,11 +59,11 @@ class LoggerService:
             return
 
         # Create logs directory if it doesn't exist
-        logs_dir = Path(__file__).parent.parent.parent.parent / "logs"
+        logs_dir = Path(__file__).parent.parent / "logs"
         logs_dir.mkdir(exist_ok=True)
 
         # Configure root logger
-        self.logger = logging.getLogger("neuro_symbolic")
+        self.logger = logging.getLogger("claude-code-proxy")
         self.logger.setLevel(logging.DEBUG)
 
         # Clear any existing handlers (important for streamlit hot-reloading)
@@ -160,3 +163,34 @@ def log_request_beautifully(method, path, original_model, mapped_model, num_mess
         print(
             f"{method} {path} {status_code} | {original_model} -> {mapped_model} | {num_messages} msgs, {num_tools} tools"
         )
+
+
+def smart_format_str(obj, max_string=500, max_length=100, indent=2) -> str:
+    """Format an object to a string with rich formatting."""
+    return pretty_repr(obj, max_string=max_string, max_length=max_length, indent_size=indent)
+
+
+def smart_format_proto_str(obj, max_string=500, max_length=100, indent=2) -> str:
+    """Format a proto object to a string with rich formatting."""
+    # Convert proto to dict and format
+    formatted_obj = proto_to_dict(obj)
+    return smart_format_str(formatted_obj, max_string, max_length, indent)
+
+
+def proto_to_dict(obj) -> Union[Dict, List[Dict]]:
+    """Convert proto objects to dictionaries recursively."""
+    # If object has to_dict method (proto), use it
+    if hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
+        return obj.to_dict()
+
+    # Handle lists/tuples containing protos
+    elif isinstance(obj, (list, tuple)):
+        return [proto_to_dict(item) for item in obj]
+
+    # Handle dictionaries containing protos
+    elif isinstance(obj, dict):
+        return {k: proto_to_dict(v) for k, v in obj.items()}
+
+    # Return other types unchanged
+    else:
+        return obj

@@ -39,6 +39,7 @@ from vertexai.generative_models import (
     GenerationConfig,
     GenerativeModel,
     Part,
+    ToolConfig,
 )
 
 from src.authenticator import AuthenticationError, CredentialManager
@@ -59,7 +60,13 @@ from src.converters import (
     convert_vertex_response_to_litellm,
 )
 from src.models import MessagesRequest, TokenCountRequest, TokenCountResponse
-from src.utils import Colors, get_logger, log_request_beautifully
+from src.utils import (
+    Colors,
+    get_logger,
+    log_request_beautifully,
+    smart_format_proto_str,
+    smart_format_str,
+)
 
 logger = get_logger()
 
@@ -220,7 +227,9 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             stop_sequences=request_data.stop_sequences if request_data.stop_sequences else None,
         )
         # *** MODIFICATION END ***
-        logger.debug(f"[{request_id}] Vertex GenerationConfig: {generation_config}")  # Log the config being used
+        logger.debug(
+            f"[{request_id}] Vertex GenerationConfig: {smart_format_proto_str(generation_config)}"
+        )  # Log the config being used
 
         safety_settings = None
 
@@ -237,6 +246,30 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             logger.warning(
                 f"[{request_id}] Forcing specific tool '{forced_tool_name}' not fully implemented for Vertex SDK. Proceeding with auto tool choice."
             )
+
+        # --- Create Vertex Tool Config ---
+        vertex_tool_config = None
+        if vertex_tools is not None:  # Only set tool_config if tools are present
+            if intermediate_tool_choice == "none":
+                function_calling_config = ToolConfig.FunctionCallingConfig(
+                    mode=ToolConfig.FunctionCallingConfig.Mode.NONE
+                )
+                logger.debug(f"[{request_id}] Setting Vertex tool_config mode to NONE")
+            elif isinstance(intermediate_tool_choice, dict) and intermediate_tool_choice.get("type") == "function":
+                # For specific function choice, use ANY mode (closest equivalent)
+                function_calling_config = ToolConfig.FunctionCallingConfig(
+                    mode=ToolConfig.FunctionCallingConfig.Mode.ANY
+                )
+                logger.debug(f"[{request_id}] Setting Vertex tool_config mode to ANY for specific function")
+            else:
+                # Default to AUTO for auto or unrecognized values
+                function_calling_config = ToolConfig.FunctionCallingConfig(
+                    mode=ToolConfig.FunctionCallingConfig.Mode.AUTO
+                )
+                logger.debug(f"[{request_id}] Setting Vertex tool_config mode to AUTO")
+
+            # Create the proper ToolConfig object
+            vertex_tool_config = ToolConfig(function_calling_config=function_calling_config)
 
         # Log request details before calling API
         num_vertex_content = len(vertex_history) if vertex_history else 0
@@ -260,13 +293,17 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             logger.info(
                 f"[{request_id}] Calling Vertex AI generate_content_async (streaming) with effective_temperature={effective_temperature}"
             )  # Log temp used
+            logger.debug(f"[{request_id}] Streaming History Length: {len(vertex_history)}")
+            logger.debug(f"[{request_id}] Streaming Generation Config: {smart_format_proto_str(generation_config)}")
+            logger.debug(f"[{request_id}] Streaming Tools: {smart_format_proto_str(vertex_tools)}")
+            logger.debug(f"[{request_id}] Streaming Tool Config: {smart_format_proto_str(vertex_tool_config)}")
             try:
                 vertex_stream_generator = await model.generate_content_async(
                     contents=vertex_history,
                     generation_config=generation_config,  # Pass the potentially modified config
                     safety_settings=safety_settings,
                     tools=vertex_tools,
-                    # tool_config=vertex_tool_config,
+                    tool_config=vertex_tool_config,
                     stream=True,
                 )
             # ... (rest of streaming try/except block remains the same) ...
@@ -284,6 +321,7 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                 )
 
             adapted_stream = adapt_vertex_stream_to_litellm(vertex_stream_generator, request_id, actual_gemini_model_id)
+            logger.debug(f"[{request_id}] Vertex AI stream successfully adapted to LiteLLM format")
             headers = {
                 "Content-Type": "text/event-stream",
                 "Cache-Control": "no-cache",
@@ -310,17 +348,24 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
 
             while retries <= max_retries:
                 logger.info(f"[{request_id}] Non-streaming attempt {retries + 1}/{max_retries + 1}")
+
+                logger.debug(f"[{request_id}] History Length: {len(vertex_history)}")
+                logger.debug(f"[{request_id}] Generation Config: {smart_format_proto_str(generation_config)}")
+                logger.debug(f"[{request_id}] Tools: {smart_format_proto_str(vertex_tools)}")
+                logger.debug(f"[{request_id}] Tool Config: {smart_format_proto_str(vertex_tool_config)}")
+
                 try:
                     vertex_response = await model.generate_content_async(
                         contents=vertex_history,
                         generation_config=generation_config,  # Pass the potentially modified config
                         safety_settings=safety_settings,
                         tools=vertex_tools,
-                        # tool_config=vertex_tool_config,
+                        tool_config=vertex_tool_config,
                         stream=False,
                     )
                     logger.debug(
-                        f"[{request_id}] Raw Vertex AI Non-Streaming Response (Attempt {retries + 1}): {vertex_response}"
+                        f"[{request_id}] Raw Vertex AI Non-Streaming Response (Attempt {retries + 1}): "
+                        f"{smart_format_proto_str(vertex_response)}"
                     )
 
                     is_malformed = False
@@ -379,12 +424,17 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             litellm_like_response = convert_vertex_response_to_litellm(
                 vertex_response, actual_gemini_model_id, request_id
             )
+            logger.debug(f"[{request_id}] LiteLLM-like response: {smart_format_str(litellm_like_response)}")
 
             # Log the original model name being passed to ensure it's not None
             logger.debug(f"[{request_id}] Original model name for final conversion: '{original_model_name}'")
 
             # --- Convert Intermediate Format -> Final Anthropic Format ---
             anthropic_response = convert_litellm_to_anthropic(litellm_like_response, original_model_name)
+            if anthropic_response:
+                logger.debug(
+                    f"[{request_id}] Final Anthropic response: {smart_format_str(anthropic_response.model_dump())}"
+                )
 
             if not anthropic_response:
                 logger.error(f"[{request_id}] Failed to convert final response to Anthropic format.")
