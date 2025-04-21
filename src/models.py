@@ -1,31 +1,39 @@
-"""
-Pydantic models for the AI Platform proxy.
-These models are used to validate and convert between Anthropic and AI Platform formats.
+"""Pydantic models for API request/response validation.
+
+Defines data models for the proxy API, including models for:
+- Content blocks (text, images, tool use)
+- Messages
+- API requests and responses
+- Model name mapping between Claude and Gemini
 """
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, field_validator
 
+from src.config import GEMINI_BIG_MODEL, GEMINI_SMALL_MODEL
+from src.utils import get_logger
 
-# Content Block Models
+logger = get_logger()
+
+
 class ContentBlockText(BaseModel):
-    """Text content block in Anthropic API format."""
-
     type: Literal["text"]
     text: str
 
 
-class ContentBlockImage(BaseModel):
-    """Image content block in Anthropic API format."""
+class ContentBlockImageSource(BaseModel):
+    type: Literal["base64"]
+    media_type: str
+    data: str
 
+
+class ContentBlockImage(BaseModel):
     type: Literal["image"]
-    source: Dict[str, Any]
+    source: ContentBlockImageSource
 
 
 class ContentBlockToolUse(BaseModel):
-    """Tool use content block in Anthropic API format."""
-
     type: Literal["tool_use"]
     id: str
     name: str
@@ -33,110 +41,127 @@ class ContentBlockToolUse(BaseModel):
 
 
 class ContentBlockToolResult(BaseModel):
-    """Tool result content block in Anthropic API format."""
-
     type: Literal["tool_result"]
     tool_use_id: str
-    content: Union[str, List[Dict[str, Any]], Dict[str, Any], List[Any], Any]
+    content: Union[str, List[Dict[str, Any]]]
+    is_error: Optional[bool] = False
+
+
+ContentBlock = Union[ContentBlockText, ContentBlockImage, ContentBlockToolUse, ContentBlockToolResult]
 
 
 class SystemContent(BaseModel):
-    """System message content in Anthropic API format."""
-
     type: Literal["text"]
     text: str
 
 
-# Message Models
 class Message(BaseModel):
-    """Message in Anthropic API format."""
-
     role: Literal["user", "assistant"]
-    content: Union[str, List[Union[ContentBlockText, ContentBlockImage, ContentBlockToolUse, ContentBlockToolResult]]]
+    content: Union[str, List[ContentBlock]]
 
 
-class Tool(BaseModel):
-    """Tool definition in Anthropic API format."""
+class ToolInputSchema(BaseModel):
+    type: Literal["object"] = "object"
+    properties: Dict[str, Any]
+    required: Optional[List[str]] = None
 
+
+class ToolDefinition(BaseModel):
     name: str
     description: Optional[str] = None
-    input_schema: Dict[str, Any]
+    input_schema: ToolInputSchema
 
 
-class ThinkingConfig(BaseModel):
-    """Thinking configuration in Anthropic API format."""
-
-    enabled: bool
-
-
-# Request Models
 class MessagesRequest(BaseModel):
-    """Request for /v1/messages endpoint in Anthropic API format."""
-
-    model: str
-    max_tokens: int
+    model: str  # This will hold the *mapped* Gemini model ID after validation
     messages: List[Message]
     system: Optional[Union[str, List[SystemContent]]] = None
+    max_tokens: int
+    metadata: Optional[Dict[str, Any]] = None
     stop_sequences: Optional[List[str]] = None
     stream: Optional[bool] = False
-    temperature: Optional[float] = 1.0
+    temperature: Optional[float] = None
     top_p: Optional[float] = None
     top_k: Optional[int] = None
-    metadata: Optional[Dict[str, Any]] = None
-    tools: Optional[List[Tool]] = None
+    tools: Optional[List[ToolDefinition]] = None
     tool_choice: Optional[Dict[str, Any]] = None
-    thinking: Optional[ThinkingConfig] = None
-    original_model: Optional[str] = None  # Will store the original model name
+    original_model_name: Optional[str] = None  # Internal field to store original name pre-mapping
 
     @field_validator("model")
-    def validate_model_field(cls, v, info):  # Renamed to avoid conflict
-        from src.utils import map_model_name
-
-        return map_model_name(v, info.data)
+    def validate_and_map_model(cls, v, info):
+        # The validator now just returns the mapped Gemini model ID
+        return map_model_name(v)
 
 
 class TokenCountRequest(BaseModel):
-    """Request for /v1/messages/count_tokens endpoint in Anthropic API format."""
-
-    model: str
+    model: str  # Mapped Gemini model ID
     messages: List[Message]
     system: Optional[Union[str, List[SystemContent]]] = None
-    tools: Optional[List[Tool]] = None
-    thinking: Optional[ThinkingConfig] = None
-    tool_choice: Optional[Dict[str, Any]] = None
-    original_model: Optional[str] = None  # Will store the original model name
+    original_model_name: Optional[str] = None  # Internal field
 
     @field_validator("model")
-    def validate_model_token_count(cls, v, info):  # Renamed to avoid conflict
-        from src.utils import map_model_name
-
-        return map_model_name(v, info.data)
+    def validate_and_map_model_token_count(cls, v, info):
+        return map_model_name(v)
 
 
-# Response Models
 class TokenCountResponse(BaseModel):
-    """Response for /v1/messages/count_tokens endpoint."""
-
     input_tokens: int
 
 
 class Usage(BaseModel):
-    """Usage information in Anthropic API response format."""
-
     input_tokens: int
     output_tokens: int
-    cache_creation_input_tokens: int = 0
-    cache_read_input_tokens: int = 0
 
 
 class MessagesResponse(BaseModel):
-    """Response for /v1/messages endpoint in Anthropic API format."""
-
     id: str
-    model: str
-    role: Literal["assistant"] = "assistant"
-    content: List[Union[ContentBlockText, ContentBlockToolUse]]
     type: Literal["message"] = "message"
-    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]] = None
+    role: Literal["assistant"] = "assistant"
+    model: str  # Original Anthropic model name
+    content: List[ContentBlock]
+    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "content_filtered"]] = None
     stop_sequence: Optional[str] = None
     usage: Usage
+
+
+def map_model_name(anthropic_model_name: str) -> str:
+    """Map Anthropic model names to equivalent Gemini models.
+
+    Translates Claude model names (haiku, sonnet, opus) to their appropriate
+    Gemini counterparts based on model capabilities and size.
+
+    Args:
+        anthropic_model_name: The original Claude model name requested
+
+    Returns:
+        str: The corresponding Gemini model ID to use
+    """
+    original_model = anthropic_model_name
+    mapped_gemini_model = GEMINI_BIG_MODEL  # Default to the larger model
+
+    logger.debug(
+        f"Attempting to map model: '{original_model}' -> Target Gemini BIG='{GEMINI_BIG_MODEL}', SMALL='{GEMINI_SMALL_MODEL}'"
+    )
+
+    clean_name = anthropic_model_name.lower().split("@")[0]
+    if clean_name.startswith("anthropic/"):
+        clean_name = clean_name[10:]
+    elif clean_name.startswith("gemini/"):
+        clean_name = clean_name[7:]  # Allow direct gemini model names like 'gemini/gemini-1.5-pro-latest'
+
+    if "haiku" in clean_name:
+        mapped_gemini_model = GEMINI_SMALL_MODEL
+        logger.info(f"Mapping '{original_model}' (Haiku) -> Target Gemini SMALL '{mapped_gemini_model}'")
+    elif "sonnet" in clean_name or "opus" in clean_name:
+        mapped_gemini_model = GEMINI_BIG_MODEL
+        logger.info(f"Mapping '{original_model}' (Sonnet/Opus) -> Target Gemini BIG '{mapped_gemini_model}'")
+    elif clean_name == GEMINI_BIG_MODEL.lower() or clean_name == GEMINI_SMALL_MODEL.lower():
+        mapped_gemini_model = clean_name  # Use the directly specified Gemini model
+        logger.info(f"Using directly specified target Gemini model: '{mapped_gemini_model}'")
+    else:
+        logger.warning(
+            f"Unrecognized Anthropic model name '{original_model}'. Defaulting to BIG model '{mapped_gemini_model}'."
+        )
+
+    # Return just the Gemini model ID (e.g., "gemini-1.5-pro-latest") for the SDK
+    return mapped_gemini_model

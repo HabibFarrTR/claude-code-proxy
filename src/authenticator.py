@@ -1,118 +1,102 @@
+"""Authentication handler for Thomson Reuters AI Platform.
+
+Provides authentication with the Thomson Reuters AI Platform to obtain
+temporary credentials for accessing Vertex AI's Gemini models.
+"""
+
 import json
-import logging
 import os
 
 import requests
-from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials as OAuth2Credentials
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from src.config import GEMINI_BIG_MODEL
+from src.utils import get_logger
 
-# Load environment variables from .env file
-load_dotenv()
+logger = get_logger()
 
 
 class AuthenticationError(Exception):
-    """Custom exception for authentication failures."""
+    """Custom exception for authentication failures with the Thomson Reuters API."""
 
     pass
 
 
 def get_gemini_credentials():
     """
-    Authenticates with the custom endpoint and returns Vertex AI credentials.
+    Authenticate with the Thomson Reuters endpoint and retrieve Vertex AI credentials.
+
+    Contacts the Thomson Reuters authentication service to obtain temporary
+    credentials for accessing Vertex AI's Gemini models. The credentials are
+    workspace-specific and model-specific.
 
     Returns:
-        tuple: Contains project_id, location, and OAuth2Credentials object.
-        Returns None, None, None on failure.
+        tuple: Contains (project_id, location, OAuth2Credentials) for Vertex AI
 
     Raises:
-        AuthenticationError: If authentication fails for any reason.
+        AuthenticationError: When authentication fails due to missing environment
+            variables, network issues, or invalid responses
     """
     workspace_id = os.getenv("WORKSPACE_ID")
-    model_name = os.getenv("MODEL_NAME", "gemini-2.5-pro-preview-03-25")  # Use BIG_MODEL as default
+    model_name_for_auth = os.getenv("GEMINI_BIG_MODEL", GEMINI_BIG_MODEL)
     auth_url = os.getenv("AUTH_URL")
 
     if not all([workspace_id, auth_url]):
+        logger.error("Missing required environment variables: WORKSPACE_ID and/or AUTH_URL")
         raise AuthenticationError("Missing required environment variables: WORKSPACE_ID, AUTH_URL")
 
-    logging.info(f"Authenticating with AI Platform for workspace {workspace_id} and model {model_name}")
-    logging.info(
-        "NOTE: Authentication requires AWS credentials to be set up via 'mltools-cli aws-login' before running"
+    logger.info(
+        f"Attempting custom authentication for workspace '{workspace_id}' (using model '{model_name_for_auth}' for auth)"
     )
+    logger.debug(f"Authentication URL: {auth_url}")
 
-    payload = {
-        "workspace_id": workspace_id,
-        "model_name": model_name,
-    }
-
-    logging.info(f"Requesting temporary token from {auth_url} for workspace {workspace_id}")
+    payload = {"workspace_id": workspace_id, "model_name": model_name_for_auth}
+    logger.info(f"Requesting temporary token from {auth_url}")
 
     try:
-        # Send the request with timeout
         resp = requests.post(auth_url, headers=None, json=payload, timeout=30)
-
-        # Check status code before proceeding
         if resp.status_code != 200:
-            error_msg = f"Authentication request failed with status {resp.status_code}"
-            logging.error(f"{error_msg}: {resp.text}")
-            raise AuthenticationError(error_msg)
+            error_msg = f"Authentication request failed: Status {resp.status_code}"
+            logger.error(f"{error_msg}. Response: {resp.text[:500]}...")
+            raise AuthenticationError(f"{error_msg}. Check auth server and credentials.")
 
-        # Parse the response as JSON
         try:
-            credentials_data = json.loads(resp.content)
+            credentials_data = resp.json()
         except json.JSONDecodeError as e:
-            error_msg = f"Invalid JSON response: {e}"
-            logging.error(f"{error_msg}. Response: {resp.text}")
+            error_msg = f"Invalid JSON response from auth server: {e}"
+            logger.error(f"{error_msg}. Raw Response: {resp.text[:500]}...")
             raise AuthenticationError(error_msg)
 
-        # Check if token exists in response (matching README example)
-        if "token" not in credentials_data:
-            error_msg = credentials_data.get("message", "Token not found in response.")
-            logging.error(f"Authentication failed: {error_msg}")
-            raise AuthenticationError(f"Failed to retrieve token. Server response: {error_msg}")
-
+        token = credentials_data.get("token")
         project_id = credentials_data.get("project_id")
         location = credentials_data.get("region")
-        token = credentials_data["token"]
         expires_on_str = credentials_data.get("expires_on", "N/A")
 
-        if not project_id or not location:
-            raise AuthenticationError("Missing 'project_id' or 'region' in authentication response.")
+        if not all([token, project_id, location]):
+            missing = [k for k in ["token", "project_id", "region"] if not credentials_data.get(k)]
+            logger.error(f"Authentication failed: Missing {missing} in response. Data: {credentials_data}")
+            raise AuthenticationError(f"Missing required fields ({missing}) in authentication response.")
 
-        # Optional: Add check for token expiry if needed for long-running sessions,
-        # but typically these tokens are short-lived and re-fetched per session.
-        logging.info(f"Successfully fetched Gemini credentials. Valid until: {expires_on_str}")
-
-        # Create credentials using the simplified constructor as in the README example
-        temp_creds = OAuth2Credentials(token)
+        logger.info(
+            f"Successfully fetched custom Gemini credentials. Project: {project_id}, Location: {location}, Valid until: {expires_on_str}"
+        )
+        temp_creds = OAuth2Credentials(token)  # This is the object LiteLLM choked on
         return project_id, location, temp_creds
 
     except requests.exceptions.ConnectionError as e:
-        logging.error(f"Connection error during authentication: {e}", exc_info=True)
-        raise AuthenticationError(f"Failed to connect to authentication server: {e}. Check your network connection.")
+        logger.error(f"Connection error during authentication to {auth_url}: {e}", exc_info=True)
+        raise AuthenticationError(f"Failed to connect to authentication server: {e}. Check network and URL.")
     except requests.exceptions.Timeout as e:
-        logging.error(f"Timeout during authentication: {e}", exc_info=True)
-        raise AuthenticationError(f"Authentication request timed out: {e}. Server might be overloaded.")
+        logger.error(f"Timeout during authentication to {auth_url}: {e}", exc_info=True)
+        raise AuthenticationError(f"Authentication request timed out: {e}. Auth server might be down or overloaded.")
     except requests.exceptions.RequestException as e:
-        logging.error(f"Network error during authentication: {e}", exc_info=True)
-        # Include response text in the error message if available
-        if "resp" in locals() and hasattr(resp, "text"):
-            error_details = f"{e}. Response: {resp.text}"
-        else:
-            error_details = str(e)
-        raise AuthenticationError(f"Network error connecting to auth endpoint: {error_details}")
-    except json.JSONDecodeError as e:
-        # Get the response text if 'resp' exists
-        response_text = resp.text if "resp" in locals() and hasattr(resp, "text") else "No response available"
-        error_msg = f"Failed to parse authentication response: {e}"
-        logging.error(f"{error_msg}. Response text: {response_text}", exc_info=True)
-        raise AuthenticationError(f"{error_msg}. Check server response format.")
+        response_text = getattr(e.response, "text", "(No response text available)")
+        logger.error(
+            f"Network error during authentication to {auth_url}: {e}. Response: {response_text}", exc_info=True
+        )
+        raise AuthenticationError(f"Network error connecting to auth endpoint: {e}")
+    except AuthenticationError:
+        raise  # Re-raise specific auth errors
     except Exception as e:
-        logging.error(f"An unexpected error occurred during authentication: {e}", exc_info=True)
-        # Re-raise specific AuthenticationError or a generic one
-        if isinstance(e, AuthenticationError):
-            raise
-        else:
-            raise AuthenticationError(f"An unexpected error during authentication: {e}")
+        logger.error(f"Unexpected error during custom authentication: {e}", exc_info=True)
+        raise AuthenticationError(f"Unexpected error during authentication: {e}")
