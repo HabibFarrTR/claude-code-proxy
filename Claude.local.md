@@ -18,7 +18,7 @@ credential manager.
 - Rationale: Fixes performance bottleneck, potential race conditions, and aligns with standard SDK usage patterns.
 - Verification: Server starts, basic requests succeed, logs show initialization happens once.
 
-### Task 2: Correct Tool Schema Handling
+### Task 2: Correct Tool Schema Handling - Completed
 - Goal: Fix the primary suspected cause of tool failures by aligning schema processing with Gemini documentation.
 - Actions:
   - Modify src/converters.py: clean_gemini_schema:

@@ -35,8 +35,13 @@ rich = "^14.0.0"
 [tool.poetry.scripts]
 start = "uvicorn:run"
 
-[tool.pytest]
+[tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+markers = [
+    "integration: marks tests that integrate with external services",
+]
 
 [build-system]
 requires = ["poetry-core"]

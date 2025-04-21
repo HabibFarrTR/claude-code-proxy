@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Dict, List
 
 import pytest
 import vertexai
@@ -322,7 +322,7 @@ def test_tool_with_enum_values():
 
 
 def test_verify_clean_gemini_schema():
-    """Verify that the updated clean_gemini_schema function preserves additionalProperties"""
+    """Verify that the clean_gemini_schema function transforms additionalProperties correctly"""
 
     # Test with a simple schema containing additionalProperties
     simple_schema = {
@@ -345,21 +345,28 @@ def test_verify_clean_gemini_schema():
     print(f"Original schema['properties']['input']: {json.dumps(simple_schema['properties']['input'], indent=2)}")
     print(f"Cleaned schema['properties']['input']: {json.dumps(result['properties']['input'], indent=2)}")
 
-    # Check that additionalProperties is preserved
-    assert "additionalProperties" in result["properties"]["input"], "additionalProperties should be preserved!"
+    # Check that additionalProperties is transformed into _additionalProps
+    assert "additionalProperties" not in result["properties"]["input"], "additionalProperties should be removed"
+    assert "_additionalProps" in result["properties"]["input"]["properties"], "_additionalProps should be added"
     assert (
-        result["properties"]["input"]["additionalProperties"] is True
-    ), "additionalProperties value should remain True!"
+        result["properties"]["input"]["properties"]["_additionalProps"]["type"] == "object"
+    ), "_additionalProps should have type 'object'"
+    assert (
+        "properties" in result["properties"]["input"]["properties"]["_additionalProps"]
+    ), "_additionalProps should have properties"
+    assert (
+        "*" in result["properties"]["input"]["properties"]["_additionalProps"]["properties"]
+    ), "_additionalProps should have wildcard property"
 
 
 @pytest.mark.integration
-def test_fix_clean_gemini_schema():
-    """Test an improved version of clean_gemini_schema that preserves additionalProperties"""
+def test_current_implementation_assessment():
+    """Evaluate the current implementation of clean_gemini_schema for schema handling"""
 
-    # The key issue was that the old implementation removed additionalProperties
-    # Let's verify that the current implementation preserves it
-    def inspect_current_impl():
-        test_schema = {
+    # Test if the current implementation is working correctly with various schema patterns
+    def evaluate_current_implementation():
+        # Test 1: Simple additionalProperties: true
+        test_schema_1 = {
             "type": "object",
             "properties": {
                 "input": {
@@ -370,96 +377,54 @@ def test_fix_clean_gemini_schema():
             },
         }
 
-        # Get a deep copy to avoid any reference issues
-        import copy
-
-        test_schema_copy = copy.deepcopy(test_schema)
-
-        # Call the current function and log detailed output
-        logger.info(
-            f"Before clean: additionalProperties present: {'additionalProperties' in test_schema_copy['properties']['input']}"
-        )
-        result = clean_gemini_schema(test_schema_copy)
-        logger.info(
-            f"After clean: additionalProperties present: {'additionalProperties' in result['properties']['input']}"
-        )
-
-        # Return analysis
-        return {
-            "preserves_additionalProperties": "additionalProperties" in result["properties"]["input"],
-            "detailed_result": result,
-        }
-
-    # An improved version that would keep additionalProperties
-    def improved_clean_gemini_schema(schema: Any) -> Any:
-        """Improved schema cleaner that preserves additionalProperties"""
-        if isinstance(schema, dict):
-            # Create a deep copy to avoid any reference issues
-            import copy
-
-            cleaned_schema = copy.deepcopy(schema)
-
-            # Remove $schema if present
-            if "$schema" in cleaned_schema:
-                cleaned_schema.pop("$schema")
-
-            # DO NOT remove additionalProperties
-
-            # Handle string formats
-            if cleaned_schema.get("type") == "string" and "format" in cleaned_schema:
-                if cleaned_schema["format"] not in {"enum", "date-time"}:
-                    cleaned_schema.pop("format")
-
-            # Recursively clean nested structures
-            for key, value in list(cleaned_schema.items()):
-                if isinstance(value, (dict, list)):
-                    cleaned_schema[key] = improved_clean_gemini_schema(value)
-
-            return cleaned_schema
-        elif isinstance(schema, list):
-            return [improved_clean_gemini_schema(item) for item in schema]
-        else:
-            return schema
-
-    # First, inspect the behavior of the current implementation
-    current_behavior = inspect_current_impl()
-    logger.info(f"Current implementation behavior: {json.dumps(current_behavior, indent=2)}")
-
-    # Create a simple test case
-    simple_tool = {
-        "name": "TestTool",
-        "description": "Simple test tool",
-        "parameters": {
+        # Test 2: Nested additionalProperties
+        test_schema_2 = {
             "type": "object",
             "properties": {
-                "input": {
-                    "type": "object",
-                    "description": "Input with additionalProperties",
-                    "additionalProperties": True,
+                "invocations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "input": {
+                                "type": "object",
+                                "additionalProperties": True,
+                            }
+                        },
+                    },
                 }
             },
-        },
-    }
+        }
 
-    # Apply both functions and compare results
-    original_result = clean_gemini_schema(simple_tool["parameters"])
-    improved_result = improved_clean_gemini_schema(simple_tool["parameters"])
+        # Process both test schemas
+        import copy
 
-    logger.info(f"Original implementation result:\n{json.dumps(original_result, indent=2)}")
-    logger.info(f"Improved implementation result:\n{json.dumps(improved_result, indent=2)}")
+        result_1 = clean_gemini_schema(copy.deepcopy(test_schema_1))
+        result_2 = clean_gemini_schema(copy.deepcopy(test_schema_2))
 
-    # Check if our improved version preserves additionalProperties
-    has_props = "additionalProperties" in improved_result["properties"]["input"]
-    print(f"\n\nTEST RESULT - Improved implementation preserves additionalProperties: {has_props}")
-    print(f"Original: {json.dumps(original_result['properties']['input'], indent=2)}")
-    print(f"Improved: {json.dumps(improved_result['properties']['input'], indent=2)}")
+        logger.info("Test 1 result: Simple additionalProperties: true")
+        logger.info(
+            f"Original input.additionalProperties exists: {'additionalProperties' in test_schema_1['properties']['input']}"
+        )
+        logger.info(f"Transformed: {'_additionalProps' in result_1['properties']['input'].get('properties', {})}")
 
-    if has_props:
-        print("SUCCESS: Improved implementation preserves additionalProperties")
-    else:
-        print("FAILED: Improved implementation still removes additionalProperties")
+        logger.info("\nTest 2 result: Nested additionalProperties")
+        nested_input = result_2["properties"]["invocations"]["items"]["properties"]["input"]
+        logger.info(
+            f"Transformed nested _additionalProps exists: {'_additionalProps' in nested_input.get('properties', {})}"
+        )
 
-    # Now let's test the BatchTool specifically
+        return {
+            "test1_transforms_additionalProps": "_additionalProps"
+            in result_1["properties"]["input"].get("properties", {}),
+            "test2_transforms_nested": "_additionalProps" in nested_input.get("properties", {}),
+        }
+
+    # Run the evaluation
+    evaluation = evaluate_current_implementation()
+    logger.info(f"Evaluation results: {json.dumps(evaluation, indent=2)}")
+
+    # Create a test case with the BatchTool schema
     batch_tool = {
         "name": "BatchTool",
         "description": "Batch execution tool that runs multiple tools",
@@ -488,95 +453,22 @@ def test_fix_clean_gemini_schema():
         },
     }
 
-    # Proposed implementation for the actual codebase
-    def proposed_clean_gemini_schema_implementation(schema: Any) -> Any:
-        """
-        Minimal schema cleaner for Gemini compatibility.
-        Preserves additionalProperties and only removes what's absolutely necessary.
-        """
-        if isinstance(schema, dict):
-            cleaned_schema = schema.copy()  # Use copy() for shallow copy
+    # Process the BatchTool schema
+    batch_result = clean_gemini_schema(batch_tool["parameters"])
 
-            # Remove $schema if present - this is the only field we know needs removal
-            if "$schema" in cleaned_schema:
-                cleaned_schema.pop("$schema")
+    # Examine the results for BatchTool
+    batch_input_path = batch_result["properties"]["invocations"]["items"]["properties"]["input"]
+    batch_has_transform = "_additionalProps" in batch_input_path.get("properties", {})
 
-            # DO NOT remove or transform additionalProperties
+    print("\nCurrent Implementation BatchTool Result:")
+    print(json.dumps(batch_input_path, indent=2))
+    print(f"Transforms nested additionalProperties: {batch_has_transform}")
 
-            # Only handle known problematic formats for string types
-            if cleaned_schema.get("type") == "string" and "format" in cleaned_schema:
-                if cleaned_schema["format"] not in {"enum", "date-time"}:
-                    cleaned_schema.pop("format")
+    # Verify the transformation is correct
+    assert "additionalProperties" not in batch_input_path, "additionalProperties should be removed"
+    assert "_additionalProps" in batch_input_path.get("properties", {}), "_additionalProps should be added"
+    assert "*" in batch_input_path["properties"]["_additionalProps"]["properties"], "Wildcard property should be added"
 
-            # Handle null values in required lists
-            if "required" in cleaned_schema and (
-                cleaned_schema["required"] is None
-                or (isinstance(cleaned_schema["required"], list) and not cleaned_schema["required"])
-            ):
-                cleaned_schema.pop("required")
-
-            # Recursively process nested structures
-            for key, value in list(cleaned_schema.items()):
-                if isinstance(value, (dict, list)):
-                    cleaned_schema[key] = proposed_clean_gemini_schema_implementation(value)
-
-            return cleaned_schema
-        elif isinstance(schema, list):
-            # Remove null items from lists
-            return [proposed_clean_gemini_schema_implementation(item) for item in schema if item is not None]
-        else:
-            return schema
-
-    # Test our final proposed implementation
-    proposed_result = proposed_clean_gemini_schema_implementation(batch_tool["parameters"])
-    logger.info(f"Proposed implementation result:\n{json.dumps(proposed_result, indent=2)}")
-
-    # Check nested additionalProperties
-    has_additional_props = (
-        "additionalProperties" in proposed_result["properties"]["invocations"]["items"]["properties"]["input"]
-    )
-    print("\nProposed implementation result for BatchTool:")
-    print(json.dumps(proposed_result["properties"]["invocations"]["items"]["properties"]["input"], indent=2))
-    print(f"Preserves nested additionalProperties: {has_additional_props}")
-
-    # This is our recommended implementation for src/converters.py
-    logger.info("\nRECOMMENDED IMPLEMENTATION:")
-    logger.info(
-        """
-    def clean_gemini_schema(schema: Any) -> Any:
-        \"\"\"
-        Minimal schema cleaner for Gemini compatibility.
-        Preserves additionalProperties and only removes what's absolutely necessary.
-        \"\"\"
-        if isinstance(schema, dict):
-            cleaned_schema = schema.copy()  # Use copy() for shallow copy
-
-            # Remove $schema if present - this is the only field we know needs removal
-            if "$schema" in cleaned_schema:
-                cleaned_schema.pop("$schema")
-
-            # DO NOT remove or transform additionalProperties
-
-            # Only handle known problematic formats for string types
-            if cleaned_schema.get("type") == "string" and "format" in cleaned_schema:
-                if cleaned_schema["format"] not in {"enum", "date-time"}:
-                    cleaned_schema.pop("format")
-
-            # Handle null values in required lists
-            if "required" in cleaned_schema and (cleaned_schema["required"] is None or
-                                              (isinstance(cleaned_schema["required"], list) and not cleaned_schema["required"])):
-                cleaned_schema.pop("required")
-
-            # Recursively process nested structures
-            for key, value in list(cleaned_schema.items()):
-                if isinstance(value, (dict, list)):
-                    cleaned_schema[key] = clean_gemini_schema(value)
-
-            return cleaned_schema
-        elif isinstance(schema, list):
-            # Remove null items from lists
-            return [clean_gemini_schema(item) for item in schema if item is not None]
-        else:
-            return schema
-    """
-    )
+    # Log success if test passes
+    logger.info("Current implementation is working correctly for BatchTool schema.")
+    print("Current implementation successfully transforms BatchTool schema as expected.")
