@@ -37,7 +37,8 @@ A specialized, modular proxy server that lets you use Anthropic clients with Tho
    **AIplatform Configuration (Thomson Reuters):**
    *   `WORKSPACE_ID`: Your Thomson Reuters AIplatform workspace ID (REQUIRED).
    *   `AUTH_URL`: Authentication URL for Thomson Reuters AIplatform (default: "https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token").
-   *   `MODEL_NAME`: The model name to use with AIplatform (default: "gemini-2.5-pro-preview-03-25").
+   *   `BIG_MODEL`: The high-capability model to use (default: "gemini-2.5-pro-preview-03-25").
+   *   `SMALL_MODEL`: The faster, lighter model to use (default: "gemini-2.0-flash").
 
    **IMPORTANT**: You must run `mltools-cli aws-login` before starting the server to set up AWS credentials.
 
@@ -101,11 +102,10 @@ We provide two scripts to make using Claude Code with the proxy easier:
 
 The proxy automatically maps Claude models to AIplatform models:
 
-| Claude Model | AIplatform Mapping |
-|--------------|-------------------|
-| claude-3-haiku | aiplatform/gemini-2.0-flash |
-| claude-3-sonnet | aiplatform/gemini-2.5-pro-preview-03-25 |
-| claude-3-opus | aiplatform/gemini-2.5-pro-preview-03-25 |
+| Claude Model      | AIplatform Mapping |
+|-------------------|-------------------|
+| claude-3.5-haiku  | aiplatform/gemini-2.0-flash |
+| claude-3.7-sonnet | aiplatform/gemini-2.5-pro-preview-03-25 |
 
 ### Supported Models
 
@@ -120,8 +120,8 @@ The proxy automatically adds the appropriate prefix to model names:
 - Claude models (haiku, sonnet, opus) are mapped to the appropriate AIplatform model
 
 For example:
-- `claude-3-sonnet-20240229` becomes `aiplatform/gemini-2.5-pro-preview-03-25`
-- `claude-3-haiku-20240307` becomes `aiplatform/gemini-2.0-flash`
+- `claude-3.7-sonnet` becomes `aiplatform/gemini-2.5-pro-preview-03-25`
+- `claude-3.5-haiku` becomes `aiplatform/gemini-2.0-flash`
 - Direct use: `aiplatform/gemini-2.5-pro-preview-03-25`
 
 ## How It Works 🧩
@@ -136,6 +136,19 @@ This specialized proxy works by:
 6. **Returning** the formatted response to the client ✅
 
 The proxy handles both streaming and non-streaming responses, maintaining compatibility with all Claude clients. 🌊
+
+### Architecture 🏗️
+
+The proxy uses a modular architecture for maintainability and extensibility:
+
+| Module | Purpose |
+|--------|---------|
+| `server.py` | FastAPI application with endpoints for chat completions and token counting |
+| `models.py` | Pydantic data models for request/response validation and model mapping |
+| `utils.py` | Logging configuration, color formatting, and request visualization |
+| `config.py` | Environment variables and configuration constants |
+| `authenticator.py` | Thomson Reuters AI Platform authentication |
+| `converters.py` | Format conversion utilities between Anthropic and Vertex AI APIs |
 
 ## Testing 🧪
 
@@ -197,3 +210,25 @@ The shell profile:
 - Provides convenient aliases for using Claude with different backends
 - Allows starting/stopping the proxy server
 - Can be integrated into your shell startup files (.bashrc/.zshrc)
+
+## Known Limitations 🚫
+
+While this proxy enables using Claude Code with Thomson Reuters AIplatform's Gemini models, there are some inherent limitations:
+
+### Tool Usage Limitations
+
+1. **Batch Tool Operations**: Gemini models cannot process multiple tool calls simultaneously in the same way Claude does. The BatchTool feature of Claude Code will result in "MALFORMED_FUNCTION_CALL" errors.
+
+2. **Function Call Format**: The underlying API formats for function/tool calling differ between Claude and Gemini. Complex tool use patterns that work with Claude may not translate properly to Gemini.
+
+3. **Error Handling**: When function calls fail due to format differences, the proxy returns a generic "[Proxy Error: The model generated an invalid tool call and could not complete the request. Please try rephrasing.]" message.
+
+### Model Behavior Differences
+
+1. **Tool Output Processing**: Gemini and Claude may process and reason about tool outputs differently, affecting follow-up actions in agentic workflows.
+
+2. **State Management**: Different approaches to maintaining chat state between models can affect multi-turn tool usage.
+
+3. **Complex Workflows**: Advanced agentic workflows with multiple tool calls or batch operations will have degraded reliability compared to native Claude.
+
+Despite state-of-the-art capabilities, Gemini models are not drop-in replacements for Claude in complex agentic workflows. Simple tool use scenarios work well, but more complex interactions may require adjustments to your workflow.
