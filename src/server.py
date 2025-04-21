@@ -379,6 +379,10 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
             litellm_like_response = convert_vertex_response_to_litellm(
                 vertex_response, actual_gemini_model_id, request_id
             )
+
+            # Log the original model name being passed to ensure it's not None
+            logger.debug(f"[{request_id}] Original model name for final conversion: '{original_model_name}'")
+
             # --- Convert Intermediate Format -> Final Anthropic Format ---
             anthropic_response = convert_litellm_to_anthropic(litellm_like_response, original_model_name)
 
