@@ -3,9 +3,11 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
+
 This is a specialized proxy server that allows Claude clients to interact with Thomson Reuters AI Platform's Vertex AI models. It provides a mapping from Anthropic Claude API to Vertex AI, enabling Claude Code clients to use AI Platform models without modification.
 
 ## Key Files
+
 - `src/server.py`: Main server with API endpoints and request handling
 - `src/models.py`: Pydantic models for API requests/responses
 - `src/utils.py`: Utility functions for logging and formatting
@@ -15,6 +17,7 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - `tests/test_server.py`: Tests for AI Platform integration
 
 ## Module Structure
+
 - `server.py`: FastAPI application with endpoints for chat completions and token counting
 - `models.py`: Pydantic data models for request/response validation and model mapping
 - `utils.py`: Logging configuration, color formatting, and request visualization
@@ -23,6 +26,7 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - `converters.py`: Format conversion utilities for Anthropic/Vertex compatibility
 
 ## Build/Test Commands
+
 - Install dependencies: `poetry install`
 - Run server: `poetry run uvicorn src.server:app --host 0.0.0.0 --port 8082 --reload`
 - Run tests (all): `poetry run pytest tests/`
@@ -30,6 +34,7 @@ This is a specialized proxy server that allows Claude clients to interact with T
 - Run with shell script [run_tests.sh](scripts/run_tests.sh) (for running with a test server instance)
 
 ## AI Platform Integration
+
 - Authentication requires AWS credentials (run `mltools-cli aws-login` before starting)
 - Uses OAuth2Credentials from a Thomson Reuters token
 - Directly integrates with Vertex AI
@@ -38,6 +43,7 @@ This is a specialized proxy server that allows Claude clients to interact with T
   - claude-3.7-sonnet → gemini-2.5-pro-preview-03-25
 
 ## Code Style Guidelines
+
 - Imports: Group standard lib, third-party, and local imports, sorted alphabetically
 - Formatting: Use 4-space indentation and follow PEP 8 guidelines
 - Type annotations: Use Python's typing module for function parameters and return values
@@ -93,37 +99,37 @@ particularly impacting tool usage reliability:
 ### Tool Usage Limitations
 
 1.  **Incorrect Schema Cleaning:** The `src/converters.py:clean_gemini_schema` function aggressively removes potentially valid and necessary
- schema information (e.g., `enum`, specific `format` types) required by the Gemini API. This is a **primary suspect** for causing
-`MALFORMED_FUNCTION_CALL` errors and incorrect tool behavior. *(See Task 2)*
+    schema information (e.g., `enum`, specific `format` types) required by the Gemini API. This is a **primary suspect** for causing
+    `MALFORMED_FUNCTION_CALL` errors and incorrect tool behavior. _(See Task 2)_
 2.  **Missing `tool_config` Mapping:** Anthropic's `tool_choice` parameter (e.g., forcing a specific tool or `any` tool) is not correctly
-translated into Gemini's required `tool_config` modes (`ANY`/`NONE`). The proxy likely defaults to `AUTO`, potentially ignoring the
-requested tool choice behavior. *(See Task 3)*
+    translated into Gemini's required `tool_config` modes (`ANY`/`NONE`). The proxy likely defaults to `AUTO`, potentially ignoring the
+    requested tool choice behavior. _(See Task 3)_
 3.  **Fragile History/Stream Conversion:** The logic in `src/converters.py` for converting tool calls, arguments, and results within the
-conversation history and during streaming is complex and prone to errors. This can lead to corrupted state being sent to Gemini or malformed
- `tool_use` blocks being sent to the client. *(See Task 6 & 7)*
+    conversation history and during streaming is complex and prone to errors. This can lead to corrupted state being sent to Gemini or malformed
+    `tool_use` blocks being sent to the client. _(See Task 6 & 7)_
 4.  **No Batch Tool Support (Gemini Limitation):** Gemini models do not support executing multiple tool calls in parallel within a single
-turn, unlike Claude. The proxy does not serialize these, so client attempts to use batch operations (like `BatchTool`) will fail.
+    turn, unlike Claude. The proxy does not serialize these, so client attempts to use batch operations (like `BatchTool`) will fail.
 
 ### Performance and Stability
 
 1.  **Per-Request Auth/Initialization:** The server currently performs authentication and Vertex AI SDK initialization for every incoming
-request (`src/server.py`). This adds significant latency and potential instability under load. *(See Task 1)*
+    request (`src/server.py`). This adds significant latency and potential instability under load. _(See Task 1)_
 
 ### Other Issues
 
 1.  **Minor Inconsistencies:** Issues like inconsistent request ID handling and potentially inaccurate model name mapping exist but are less
- critical than the tool usage problems. *(See Task 4 & 8)*
-2. Add a New Section: "Current Development Focus"
+    critical than the tool usage problems. _(See Task 4 & 8)_
+2.  Add a New Section: "Current Development Focus"
 
 ## Current Development Focus
 
 Efforts are underway to address the known limitations, particularly focusing on improving tool usage reliability and overall robustness. Key
- areas include:
+areas include:
 
-*   Correcting tool schema handling (`clean_gemini_schema`).
-*   Implementing Gemini's `tool_config` modes based on Anthropic's `tool_choice`.
-*   Refactoring authentication/SDK initialization for performance and stability.
-*   Improving the robustness of conversion logic (history/streaming) and error handling.
+- Correcting tool schema handling (`clean_gemini_schema`).
+- Implementing Gemini's `tool_config` modes based on Anthropic's `tool_choice`.
+- Refactoring authentication/SDK initialization for performance and stability.
+- Improving the robustness of conversion logic (history/streaming) and error handling.
 
 When working on the codebase, please prioritize changes aligning with these improvement goals (referenced by Task numbers in "Known
 Limitations").

@@ -17,38 +17,46 @@ A specialized, modular proxy server that lets you use Anthropic clients with Tho
 ### Setup 🛠️
 
 1. **Clone this repository**:
+
    ```bash
    git clone https://github.com/YOUR-COMPANY/claude-code-proxy.git
    cd claude-code-proxy
    ```
 
 2. **Install dependencies with Poetry**:
+
    ```bash
    poetry install
    ```
 
 3. **Configure Environment Variables**:
    Copy the example environment file:
+
    ```bash
    cp .env.example .env
    ```
+
    Edit `.env` and fill in your AIplatform configuration:
 
    **AIplatform Configuration (Thomson Reuters):**
-   *   `WORKSPACE_ID`: Your Thomson Reuters AIplatform workspace ID (REQUIRED).
-   *   `AUTH_URL`: Authentication URL for Thomson Reuters AIplatform (default: "https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token").
-   *   `BIG_MODEL`: The high-capability model to use (default: "gemini-2.5-pro-preview-03-25").
-   *   `SMALL_MODEL`: The faster, lighter model to use (default: "gemini-2.0-flash").
+
+   - `WORKSPACE_ID`: Your Thomson Reuters AIplatform workspace ID (REQUIRED).
+   - `AUTH_URL`: Authentication URL for Thomson Reuters AIplatform (default: "https://aiplatform.gcs.int.thomsonreuters.com/v1/gemini/token").
+   - `BIG_MODEL`: The high-capability model to use (default: "gemini-2.5-pro-preview-03-25").
+   - `SMALL_MODEL`: The faster, lighter model to use (default: "gemini-2.0-flash").
 
    **IMPORTANT**: You must run `mltools-cli aws-login` before starting the server to set up AWS credentials.
 
 4. **Run the server**:
+
    ```bash
    poetry run uvicorn src.server:app --host 0.0.0.0 --port 8082 --reload
    ```
-   *(`--reload` is optional, for development)*
+
+   _(`--reload` is optional, for development)_
 
    Alternatively, use the poetry script:
+
    ```bash
    poetry run start src.server:app --host 0.0.0.0 --port 8082 --reload
    ```
@@ -56,11 +64,13 @@ A specialized, modular proxy server that lets you use Anthropic clients with Tho
 ### Using with Claude Code 🎮
 
 1. **Install Claude Code** (if you haven't already):
+
    ```bash
    npm install -g @anthropic-ai/claude-code
    ```
 
 2. **Connect to your proxy**:
+
    ```bash
    ANTHROPIC_BASE_URL=http://localhost:8082 claude
    ```
@@ -72,6 +82,7 @@ A specialized, modular proxy server that lets you use Anthropic clients with Tho
 We provide two scripts to make using Claude Code with the proxy easier:
 
 1. **Standalone Installer** - Installs the proxy without needing the full repo:
+
    ```bash
    # Get and run the installer
    curl -s https://raw.githubusercontent.com/YOUR-COMPANY/claude-code-proxy/main/scripts/install.sh | bash
@@ -86,6 +97,7 @@ We provide two scripts to make using Claude Code with the proxy easier:
    ```
 
 2. **Shell Profile Integration** - For switching between providers:
+
    ```bash
    # Add to your .bashrc or .zshrc
    source /path/to/claude-code-proxy/scripts/claude-profile.sh
@@ -102,24 +114,29 @@ We provide two scripts to make using Claude Code with the proxy easier:
 
 The proxy automatically maps Claude models to AIplatform models:
 
-| Claude Model      | AIplatform Mapping |
-|-------------------|-------------------|
-| claude-3.5-haiku  | aiplatform/gemini-2.0-flash |
+| Claude Model      | AIplatform Mapping                      |
+| ----------------- | --------------------------------------- |
+| claude-3.5-haiku  | aiplatform/gemini-2.0-flash             |
 | claude-3.7-sonnet | aiplatform/gemini-2.5-pro-preview-03-25 |
 
 ### Supported Models
 
 #### AIplatform Models
+
 The following AIplatform models are supported with automatic `aiplatform/` prefix handling:
+
 - gemini-2.5-pro-preview-03-25 (high-capability model)
 - gemini-2.0-flash (faster, lighter model)
 
 ### Model Prefix Handling
+
 The proxy automatically adds the appropriate prefix to model names:
+
 - AIplatform models get the `aiplatform/` prefix
 - Claude models (haiku, sonnet, opus) are mapped to the appropriate AIplatform model
 
 For example:
+
 - `claude-3.7-sonnet` becomes `aiplatform/gemini-2.5-pro-preview-03-25`
 - `claude-3.5-haiku` becomes `aiplatform/gemini-2.0-flash`
 - Direct use: `aiplatform/gemini-2.5-pro-preview-03-25`
@@ -141,14 +158,14 @@ The proxy handles both streaming and non-streaming responses, maintaining compat
 
 The proxy uses a modular architecture for maintainability and extensibility:
 
-| Module | Purpose |
-|--------|---------|
-| `server.py` | FastAPI application with endpoints for chat completions and token counting |
-| `models.py` | Pydantic data models for request/response validation and model mapping |
-| `utils.py` | Logging configuration, color formatting, and request visualization |
-| `config.py` | Environment variables and configuration constants |
-| `authenticator.py` | Thomson Reuters AI Platform authentication |
-| `converters.py` | Format conversion utilities between Anthropic and Vertex AI APIs |
+| Module             | Purpose                                                                    |
+| ------------------ | -------------------------------------------------------------------------- |
+| `server.py`        | FastAPI application with endpoints for chat completions and token counting |
+| `models.py`        | Pydantic data models for request/response validation and model mapping     |
+| `utils.py`         | Logging configuration, color formatting, and request visualization         |
+| `config.py`        | Environment variables and configuration constants                          |
+| `authenticator.py` | Thomson Reuters AI Platform authentication                                 |
+| `converters.py`    | Format conversion utilities between Anthropic and Vertex AI APIs           |
 
 ## Testing 🧪
 
@@ -194,12 +211,13 @@ IMPORTANT: Before running tests, make sure you've run `mltools-cli aws-login` fi
 
 For easy deployment and usage, we provide two helper scripts:
 
-| Script | Purpose |
-|--------|---------|
-| scripts/install.sh | Standalone installer that downloads only required files and creates convenient executables |
-| scripts/claude-profile.sh | Shell integration for easy switching between Claude API and Gemini proxy |
+| Script                    | Purpose                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------ |
+| scripts/install.sh        | Standalone installer that downloads only required files and creates convenient executables |
+| scripts/claude-profile.sh | Shell integration for easy switching between Claude API and Gemini proxy                   |
 
 The installer script:
+
 - Creates a virtual environment
 - Installs only necessary dependencies
 - Downloads required source files
@@ -207,6 +225,7 @@ The installer script:
 - Allows you to specify installation directories
 
 The shell profile:
+
 - Provides convenient aliases for using Claude with different backends
 - Allows starting/stopping the proxy server
 - Can be integrated into your shell startup files (.bashrc/.zshrc)
