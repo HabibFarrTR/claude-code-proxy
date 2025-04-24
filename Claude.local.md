@@ -139,24 +139,41 @@
 - Verification: All tests pass.
 
 
-### Task 10: Implement Tool Event Logging to JSON Lines File
+### Task 10: Implement Tool Event Logging to JSON Lines File - Completed
 
-- Goal: Log successful and failed tool usage events to a separate, structured file (`tool_events.jsonl`) for local analysis, keeping these distinct from standard application logs.
+- Goal: Log successful and failed tool usage events to a separate, structured file for local analysis, keeping these distinct from standard application logs.
 - Rationale: Facilitates debugging and analysis of tool usage reliability patterns without cluttering main logs. JSON Lines format is simple and easy to parse locally.
+- Actions Completed:
+  - Implemented a structured tool event logging system in `src/utils.py` with the following key features:
+    - Daily log files (`logs/tool_events/tool_events_YYYY-MM-DD.jsonl`) for easy organization
+    - Thread-safe logging using `asyncio.Lock` to prevent file corruption
+    - Comprehensive event structure with `timestamp`, `request_id`, `tool_name`, `status`, `stage`, and `details`
+    - Enhanced logging for schema modifications in `clean_gemini_schema` with path, action, and reason tracking
+  - Added a `LoggerService` class using Loguru for improved general logging:
+    - Timestamped log files with rotation and compression
+    - Configurable log levels via environment variable
+    - Structured output format with colored console logs
+  - Integrated tool event logging throughout the request/response flow:
+    - Capturing tool usage attempts, successes, and failures
+    - Tracking schema modifications with detailed information
+    - Logging at all critical points (Gemini request, Gemini response, client response)
+  - Updated `.gitignore` to exclude log files and directories
+  - Added comprehensive documentation to the README.md explaining:
+    - The logging system architecture
+    - How to find and analyze tool event logs
+    - Examples of commands to extract failure patterns
+    - Best practices for diagnosing tool compatibility issues
+- Files Modified: `src/utils.py`, `src/server.py`, `src/converters.py`, `.gitignore`, `README.md`, `pyproject.toml`
+- Verification: Successfully tested the logging system with both successful and failed tool usage scenarios. Logs are properly structured, thread-safe, and contain all necessary information for diagnosing tool compatibility issues between Claude and Gemini.
+
+### Task 11: Additional Test Coverage for Tool Usage
+
+- Goal: Create comprehensive test coverage for tool usage scenarios, focusing on the schema compatibility issues identified.
+- Rationale: Ensures that improvements to schema handling are properly validated and that regressions can be detected early.
 - Actions:
-  - Define the structure for the JSON event log entry (e.g., `timestamp`, `request_id`, `tool_name`, `status` ["attempt", "success", "failure"], `stage` ["gemini_request", "gemini_response", "client_response"], `details`).
-  - Create an `async def log_tool_event(...)` function in `src/utils.py`.
-    - This function will accept event details, format them into a JSON object with a timestamp.
-    - It will acquire an `asyncio.Lock` to ensure thread-safe appending to `tool_events.jsonl`.
-    - It will open `tool_events.jsonl` in append mode (`'a'`) and write the JSON string followed by a newline.
-  - Call `log_tool_event` from the following locations:
-    - `src/server.py` (`create_message`): Log `status="attempt"`, `stage="gemini_request"` when sending a request *with tools* to Gemini.
-    - `src/server.py` (`create_message`): Log `status="failure"`, `stage="gemini_response"` when `MALFORMED_FUNCTION_CALL` is detected (non-streaming). Include error details.
-    - `src/converters.py` (`adapt_vertex_stream_to_openai`): Log `status="failure"`, `stage="gemini_response"` when `MALFORMED_FUNCTION_CALL` is detected (streaming). Include error details.
-    - `src/converters.py` (`convert_vertex_response_to_openai`): Log `status="success"`, `stage="gemini_response"` when a valid `part.function_call` is processed (non-streaming). Include tool name.
-    - `src/converters.py` (`adapt_vertex_stream_to_openai`): Log `status="success"`, `stage="gemini_response"` when a valid `part.function_call` is processed (streaming). Include tool name.
-    - `src/converters.py` (`convert_openai_to_anthropic`): Log `status="success"`, `stage="client_response"` when sending a `ContentBlockToolUse` to the client (non-streaming). Include tool name.
-    - `src/converters.py` (`convert_openai_to_anthropic_sse`): Log `status="success"`, `stage="client_response"` when sending a `content_block_start` for `tool_use` to the client (streaming). Include tool name.
-  - Add `tool_events.jsonl` to the `.gitignore` file.
-- Files: `src/utils.py`, `src/server.py`, `src/converters.py`, `.gitignore`
-- Verification: Run requests that involve successful and (if possible to trigger) failed tool uses. Check that `tool_events.jsonl` is created and contains valid JSON objects on separate lines, reflecting the different stages and statuses of tool usage. Ensure regular logs in the console are not affected.
+  - Create a test suite specifically for tool usage with different schema patterns (enums, formats, nested objects)
+  - Test both successful and failure cases to validate error handling
+  - Add tests for the schema modification tracking feature
+  - Verify that the tool event logging captures all relevant information
+- Files: `tests/test_tool_schemas.py`, `tests/test_converters.py`
+- Verification: All tests pass, coverage reports show high coverage for tool-related code paths.
