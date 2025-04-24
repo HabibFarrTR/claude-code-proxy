@@ -174,6 +174,52 @@ IMPORTANT: Before running tests, make sure you've run `mltools-cli aws-login` fi
 3. Responses from Vertex AI are wrapped in Anthropic-compatible format
 4. For streaming, the proxy simulates Anthropic's server-sent event structure
 
+## Logging & Diagnostics 📊
+
+The proxy includes extensive logging to help diagnose issues, particularly with tool usage:
+
+### Standard Logging with Loguru
+
+- **Timestamped Log Files**: Log files are created in the `/logs` directory with rotation
+- **Structured Output**: Logs include timestamps, levels, and request IDs for traceability
+- **Log Levels**: Configure verbosity via environment variable `LOG_LEVEL` (default: INFO)
+
+### Tool Event Logging
+
+The proxy creates detailed JSONL (JSON Lines) logs specifically for tool events:
+
+- **Location**: `/logs/tool_events/tool_events_YYYY-MM-DD.jsonl`
+- **Format**: Each line is a complete JSON object with request tracking
+- **Events Logged**:
+  - Tool usage attempts sent to Gemini
+  - Successful tool executions
+  - Failed tool executions with error details
+  - Schema modifications made during conversion
+
+Example of analyzing tool failures:
+
+```bash
+# Find all failed tool executions
+grep '"status": "failure"' logs/tool_events/tool_events_*.jsonl
+
+# Find MALFORMED_FUNCTION_CALL errors
+grep 'MALFORMED_FUNCTION_CALL' logs/tool_events/tool_events_*.jsonl
+
+# View schema modifications for a specific request
+grep 'request_id": "abc123' logs/tool_events/tool_events_*.jsonl | grep 'schema_modifications'
+```
+
+### Schema Modification Tracking
+
+The proxy tracks all schema modifications made during the conversion process:
+
+- **Path**: JSON path to the modified element
+- **Action**: Type of modification (remove, transform, add)
+- **Original Value**: The value before modification
+- **Reason**: Why the modification was made
+
+This tracking helps identify which schema changes might be causing compatibility issues.
+
 ## Known Limitations 🚫
 
 While this proxy enables using Claude Code with Thomson Reuters AIplatform's Gemini models, there are some inherent limitations:
@@ -186,6 +232,8 @@ While this proxy enables using Claude Code with Thomson Reuters AIplatform's Gem
 
 3. **Error Handling**: When function calls fail due to format differences, the proxy returns a generic "[Proxy Error: The model generated an invalid tool call and could not complete the request. Please try rephrasing.]" message.
 
+4. **Schema Compatibility**: The proxy attempts to clean function schemas for Gemini compatibility, but some valid Claude schemas may still cause errors. Use the tool event logs to identify problematic schema patterns.
+
 ### Model Behavior Differences
 
 1. **Tool Output Processing**: Gemini and Claude may process and reason about tool outputs differently, affecting follow-up actions in agentic workflows.
@@ -195,3 +243,12 @@ While this proxy enables using Claude Code with Thomson Reuters AIplatform's Gem
 3. **Complex Workflows**: Advanced agentic workflows with multiple tool calls or batch operations will have degraded reliability compared to native Claude.
 
 Despite state-of-the-art capabilities, Gemini models are not drop-in replacements for Claude in complex agentic workflows. Simple tool use scenarios work well, but more complex interactions may require adjustments to your workflow.
+
+### Finding and Diagnosing Tool Failures
+
+When encountering tool usage failures:
+
+1. Check the tool event logs to find the specific request ID
+2. Look for schema modifications that might have caused the issue
+3. Use request/response visualization in the standard logs to see the full context
+4. Try simplifying the tool schema if specific fields or patterns consistently cause errors

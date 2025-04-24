@@ -70,6 +70,7 @@ from src.utils import (
     Colors,
     get_logger,
     log_request_beautifully,
+    log_tool_event,
     smart_format_proto_str,
     smart_format_str,
 )
@@ -190,6 +191,29 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
         vertex_history = convert_openai_messages_to_vertex_content(openai_messages)
         vertex_tools = convert_openai_tools_to_vertex_tools(openai_tools)  # Will be None if no tools
         vertex_system_instruction = Part.from_text(system_prompt_text) if system_prompt_text else None
+
+        # Log tool usage attempt if tools are present
+        if vertex_tools:
+            tool_names = []
+            if openai_tools:
+                for tool in openai_tools:
+                    if tool.get("type") == "function" and "function" in tool:
+                        func_name = tool["function"].get("name")
+                        if func_name:
+                            tool_names.append(func_name)
+
+            # Log the tool attempt event
+            await log_tool_event(
+                request_id=request_id,
+                tool_name=", ".join(tool_names) if tool_names else None,
+                status="attempt",
+                stage="gemini_request",
+                details={
+                    "num_tools": len(openai_tools) if openai_tools else 0,
+                    "tool_names": tool_names,
+                    "model": actual_gemini_model_id,
+                },
+            )
 
         # --- Prepare Generation Config for Vertex AI ---
         # *** MODIFICATION START: Use configured override temp ***
@@ -424,6 +448,20 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                         f"Upstream model returned malformed function call after retries. Message: {finish_message}"
                     )
                     logger.error(f"[{request_id}] {error_detail}")
+
+                    # Log the tool failure event
+                    await log_tool_event(
+                        request_id=request_id,
+                        tool_name=None,  # We might not know which tool failed
+                        status="failure",
+                        stage="gemini_response",
+                        details={
+                            "error": "MALFORMED_FUNCTION_CALL",
+                            "message": finish_message,
+                            "model": actual_gemini_model_id,
+                        },
+                    )
+
                     raise HTTPException(status_code=502, detail=error_detail)
 
             except RetryError as e:

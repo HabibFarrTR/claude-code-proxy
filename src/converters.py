@@ -11,6 +11,7 @@ Handles both streaming and non-streaming responses with special attention to:
 - Error handling and reporting
 """
 
+import asyncio
 import base64
 import json
 import time
@@ -37,6 +38,7 @@ from src.models import (
 )
 from src.utils import (
     get_logger,
+    log_tool_event,
     smart_format_proto_str,
     smart_format_str,
 )
@@ -182,8 +184,31 @@ def convert_anthropic_to_openai(request: MessagesRequest) -> Dict[str, Any]:
             logger.debug(f"Cleaning schema for intermediate tool format: {tool.name}")
             # Clean the schema *before* putting it into the intermediate format
             logger.debug(f"Original schema for tool '{tool.name}': {smart_format_str(input_schema)}")
-            cleaned_schema = clean_gemini_schema(input_schema)
+
+            # Log the original schema in the tool events
+            tool_schema_details = {
+                "tool_name": tool.name,
+                "original_schema": input_schema,
+            }
+
+            # Clean the schema and track all modifications
+            schema_modifications = []
+            cleaned_schema = clean_gemini_schema(input_schema, "", schema_modifications)
             logger.debug(f"Cleaned schema for tool '{tool.name}': {smart_format_str(cleaned_schema)}")
+            logger.debug(f"Schema modifications for tool '{tool.name}': {len(schema_modifications)} changes")
+
+            # Add the cleaned schema and modifications to our tool events log
+            tool_schema_details["cleaned_schema"] = cleaned_schema
+            tool_schema_details["modifications"] = schema_modifications
+            asyncio.create_task(
+                log_tool_event(
+                    request_id="schema_" + str(uuid.uuid4())[:8],
+                    tool_name=tool.name,
+                    status="attempt",
+                    stage="gemini_request",
+                    details=tool_schema_details,
+                )
+            )
 
             # Ensure basic structure expected by Vertex SDK later
             if "properties" in cleaned_schema and "type" not in cleaned_schema:
@@ -224,27 +249,74 @@ def convert_anthropic_to_openai(request: MessagesRequest) -> Dict[str, Any]:
     return openai_request
 
 
-def clean_gemini_schema(schema: Any) -> Any:
-    """Recursively removes unsupported fields from a JSON schema for Gemini."""
+def clean_gemini_schema(schema: Any, path: str = "", modifications: List[Dict] = None) -> Any:
+    """Recursively removes unsupported fields from a JSON schema for Gemini.
+
+    Args:
+        schema: The schema to clean
+        path: Current path in the schema for tracking modifications (for logging)
+        modifications: List to collect all modifications made to the schema
+
+    Returns:
+        The cleaned schema with unsupported elements removed or transformed
+    """
+    # Initialize modifications list if not provided
+    if modifications is None:
+        modifications = []
+
+    current_path = path
 
     if isinstance(schema, dict):
         # Remove specific keys unsupported by Gemini tool parameters
-        schema.pop("default", None)
+        if "default" in schema:
+            value = schema.pop("default")
+            modifications.append(
+                {
+                    "path": f"{current_path}.default",
+                    "action": "removed",
+                    "value": value,
+                    "reason": "default values are not supported by Gemini tool parameters",
+                }
+            )
 
         if "additionalProperties" in schema:
             value = schema["additionalProperties"]
             # If additionalProperties is true, we can map it to a Vertex-compatible format
             if value is True:
-                logger.info("Mapping additionalProperties: true to a type-agnostic property schema")
-                # Remove additionalProperties but add a property that can accept any value
                 schema.pop("additionalProperties")
+                modifications.append(
+                    {
+                        "path": f"{current_path}.additionalProperties",
+                        "action": "transformed",
+                        "original_value": True,
+                        "reason": "additionalProperties:true transformed to _additionalProps object with wildcard",
+                    }
+                )
 
                 # Ensure properties exists
                 if "properties" not in schema:
                     schema["properties"] = {}
+                    modifications.append(
+                        {
+                            "path": f"{current_path}",
+                            "action": "added",
+                            "property": "properties",
+                            "value": {},
+                            "reason": "required for additionalProperties transformation",
+                        }
+                    )
 
                 if "type" not in schema:
                     schema["type"] = "object"
+                    modifications.append(
+                        {
+                            "path": f"{current_path}",
+                            "action": "added",
+                            "property": "type",
+                            "value": "object",
+                            "reason": "required for additionalProperties transformation",
+                        }
+                    )
 
                 # Add a * wildcard property schema that can accept any type
                 # This is our best approximation for additionalProperties: true
@@ -259,31 +331,75 @@ def clean_gemini_schema(schema: Any) -> Any:
                         },
                     }
                     schema["properties"]["_additionalProps"] = schema_with_wildcard
-                    logger.info(
-                        "Added '_additionalProps' field with wildcard schema to represent additionalProperties capability"
+                    modifications.append(
+                        {
+                            "path": f"{current_path}.properties._additionalProps",
+                            "action": "added",
+                            "value": schema_with_wildcard,
+                            "reason": "replacement for additionalProperties: true capability",
+                        }
                     )
             elif isinstance(value, dict):
                 # If additionalProperties has a schema, incorporate it into properties
-                logger.info("Mapping schema-based additionalProperties to a type-specific property")
                 schema.pop("additionalProperties")
+                modifications.append(
+                    {
+                        "path": f"{current_path}.additionalProperties",
+                        "action": "transformed",
+                        "original_value": value,
+                        "reason": "additionalProperties schema transformed to _additionalProps property",
+                    }
+                )
 
                 # Ensure properties exists
                 if "properties" not in schema:
                     schema["properties"] = {}
+                    modifications.append(
+                        {
+                            "path": f"{current_path}",
+                            "action": "added",
+                            "property": "properties",
+                            "value": {},
+                            "reason": "required for additionalProperties schema transformation",
+                        }
+                    )
 
                 if "type" not in schema:
                     schema["type"] = "object"
+                    modifications.append(
+                        {
+                            "path": f"{current_path}",
+                            "action": "added",
+                            "property": "type",
+                            "value": "object",
+                            "reason": "required for additionalProperties schema transformation",
+                        }
+                    )
 
                 # Add a property that matches the additionalProperties schema
                 if schema["type"] == "object" and "_additionalProps" not in schema["properties"]:
                     # Clean the schema first
-                    prop_schema = clean_gemini_schema(value)
+                    inner_mods = []
+                    prop_schema = clean_gemini_schema(
+                        value, path=f"{current_path}.additionalProperties", modifications=inner_mods
+                    )
+
+                    # Add nested modifications to our list
+                    modifications.extend(inner_mods)
 
                     # Ensure the additionalProperties schema has a type
                     if "type" not in prop_schema:
                         # Default to object if no type is specified
                         prop_schema["type"] = "object"
-                        logger.warning("Added missing 'type' field to additionalProperties schema")
+                        modifications.append(
+                            {
+                                "path": f"{current_path}.additionalProperties",
+                                "action": "added",
+                                "property": "type",
+                                "value": "object",
+                                "reason": "missing type field in additionalProperties schema",
+                            }
+                        )
 
                     # Wrap it in an object with properties to ensure proper nesting
                     wrapped_schema = {
@@ -296,27 +412,65 @@ def clean_gemini_schema(schema: Any) -> Any:
                     }
 
                     schema["properties"]["_additionalProps"] = wrapped_schema
-                    logger.info(
-                        "Added '_additionalProps' field with wrapped schema to represent additionalProperties capability"
+                    modifications.append(
+                        {
+                            "path": f"{current_path}.properties._additionalProps",
+                            "action": "added",
+                            "value": wrapped_schema,
+                            "reason": "replacement for additionalProperties schema",
+                        }
                     )
             else:
                 # For false or other values, we can safely remove it
-                logger.warning(f"Removing additionalProperties with value {value} as it's not supported by Gemini API")
                 schema.pop("additionalProperties")
+                modifications.append(
+                    {
+                        "path": f"{current_path}.additionalProperties",
+                        "action": "removed",
+                        "value": value,
+                        "reason": f"additionalProperties with value {value} is not supported by Gemini API",
+                    }
+                )
 
         # Check for unsupported 'format' in string types
         if schema.get("type") == "string" and "format" in schema:
             allowed_formats = {"enum", "date-time"}
-            if schema["format"] not in allowed_formats:
-                logger.debug(f"Removing unsupported format '{schema['format']}' for string type in Gemini schema.")
+            format_value = schema["format"]
+            if format_value not in allowed_formats:
                 schema.pop("format")
+                modifications.append(
+                    {
+                        "path": f"{current_path}.format",
+                        "action": "removed",
+                        "value": format_value,
+                        "reason": f"format '{format_value}' is not supported for string type in Gemini schema",
+                    }
+                )
 
         # Recursively clean nested schemas (properties, items, etc.)
         for key, value in list(schema.items()):  # Use list() to allow modification during iteration
-            schema[key] = clean_gemini_schema(value)
+            if key == "properties" and isinstance(value, dict):
+                # Handle properties specially to track proper paths
+                if "properties" not in schema:
+                    schema["properties"] = {}
+
+                for prop_name, prop_schema in list(value.items()):
+                    prop_path = f"{current_path}.properties.{prop_name}"
+                    schema["properties"][prop_name] = clean_gemini_schema(
+                        prop_schema, path=prop_path, modifications=modifications
+                    )
+            elif key == "items" and (isinstance(value, dict) or isinstance(value, list)):
+                # Handle array items
+                schema[key] = clean_gemini_schema(value, path=f"{current_path}.items", modifications=modifications)
+            else:
+                # Handle other nested structures
+                new_path = f"{current_path}.{key}" if current_path else key
+                schema[key] = clean_gemini_schema(value, path=new_path, modifications=modifications)
     elif isinstance(schema, list):
         # Recursively clean items in a list
-        return [clean_gemini_schema(item) for item in schema]
+        for i, item in enumerate(schema):
+            schema[i] = clean_gemini_schema(item, path=f"{current_path}[{i}]", modifications=modifications)
+
     return schema
 
 
@@ -797,6 +951,17 @@ def convert_openai_to_anthropic(
                             ContentBlockToolUse(type="tool_use", id=tool_id, name=tool_name, input=args_input)
                         )
                         logger.debug(f"[{request_id}] Added tool_use content block: id={tool_id}, name={tool_name}")
+
+                        # Log successful tool event for client
+                        asyncio.create_task(
+                            log_tool_event(
+                                request_id=request_id,
+                                tool_name=tool_name,
+                                status="success",
+                                stage="client_response",
+                                details={"tool_id": tool_id, "streaming": False},
+                            )
+                        )
                     else:
                         logger.warning(
                             f"[{request_id}] Skipping conversion of non-function tool_call in response: {tc}"
@@ -1033,6 +1198,17 @@ async def convert_openai_to_anthropic_sse(
                             logger.debug(
                                 f"[{request_id}] Started tool_use block {content_block_index} (id: {tc_id}, name: {func_name})"
                             )
+
+                            # Log successful tool event for client in streaming
+                            asyncio.create_task(
+                                log_tool_event(
+                                    request_id=request_id,
+                                    tool_name=func_name,
+                                    status="success",
+                                    stage="client_response",
+                                    details={"tool_id": tc_id, "streaming": True, "block_index": content_block_index},
+                                )
+                            )
                         # Handle case where ID might come first, then name in a later chunk (less common now)
                         elif tc_id and not func_name:
                             tool_calls_buffer[tc_openai_index] = {
@@ -1248,6 +1424,22 @@ async def adapt_vertex_stream_to_openai(
                         logger.error(
                             f"[{request_id}] MALFORMED_FUNCTION_CALL detected by Vertex API. Message: {malformed_call_message}"
                         )
+
+                        # Log the tool failure event
+                        asyncio.create_task(
+                            log_tool_event(
+                                request_id=request_id,
+                                tool_name=None,  # We might not know which tool failed
+                                status="failure",
+                                stage="gemini_response",
+                                details={
+                                    "error": "MALFORMED_FUNCTION_CALL",
+                                    "message": malformed_call_message,
+                                    "streaming": True,
+                                },
+                            )
+                        )
+
                         # Do not process parts in this chunk if it's the final error chunk
                         # The API likely doesn't include valid parts alongside this error.
                         # We will handle yielding an error message later, before the final chunk.
@@ -1298,6 +1490,22 @@ async def adapt_vertex_stream_to_openai(
                                 logger.debug(
                                     f"[{request_id}] Vertex tool call delta: index={openai_tool_index_counter}, id={tool_call_id}, name={fc.name}, args='{args_str[:50]}...'"
                                 )
+
+                                # Log successful tool call event
+                                asyncio.create_task(
+                                    log_tool_event(
+                                        request_id=request_id,
+                                        tool_name=fc.name,
+                                        status="success",
+                                        stage="gemini_response",
+                                        details={
+                                            "tool_id": tool_call_id,
+                                            "index": openai_tool_index_counter,
+                                            "streaming": True,
+                                        },
+                                    )
+                                )
+
                                 openai_tool_index_counter += 1
                             else:
                                 # Neither text nor function_call found. Log an unknown part type.
@@ -1523,6 +1731,21 @@ def convert_vertex_response_to_openai(response: GenerationResponse, model_id: st
                     logger.debug(
                         f"[{request_id}] Converted non-streaming tool call: index={openai_tool_index_counter}, id={tool_call_id}, name={fc.name}"
                     )
+
+                    # Log successful tool call event
+                    asyncio.create_task(
+                        log_tool_event(
+                            request_id=request_id,
+                            tool_name=fc.name,
+                            status="success",
+                            stage="gemini_response",
+                            details={
+                                "tool_id": tool_call_id,
+                                "index": openai_tool_index_counter,
+                            },
+                        )
+                    )
+
                     openai_tool_index_counter += 1
                 elif part.function_response:
                     logger.warning(

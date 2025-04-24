@@ -137,3 +137,26 @@
 - Files: "tests/*"
 - Rationale: Essential for verifying fixes and ensuring future changes don't break functionality.
 - Verification: All tests pass.
+
+
+### Task 10: Implement Tool Event Logging to JSON Lines File
+
+- Goal: Log successful and failed tool usage events to a separate, structured file (`tool_events.jsonl`) for local analysis, keeping these distinct from standard application logs.
+- Rationale: Facilitates debugging and analysis of tool usage reliability patterns without cluttering main logs. JSON Lines format is simple and easy to parse locally.
+- Actions:
+  - Define the structure for the JSON event log entry (e.g., `timestamp`, `request_id`, `tool_name`, `status` ["attempt", "success", "failure"], `stage` ["gemini_request", "gemini_response", "client_response"], `details`).
+  - Create an `async def log_tool_event(...)` function in `src/utils.py`.
+    - This function will accept event details, format them into a JSON object with a timestamp.
+    - It will acquire an `asyncio.Lock` to ensure thread-safe appending to `tool_events.jsonl`.
+    - It will open `tool_events.jsonl` in append mode (`'a'`) and write the JSON string followed by a newline.
+  - Call `log_tool_event` from the following locations:
+    - `src/server.py` (`create_message`): Log `status="attempt"`, `stage="gemini_request"` when sending a request *with tools* to Gemini.
+    - `src/server.py` (`create_message`): Log `status="failure"`, `stage="gemini_response"` when `MALFORMED_FUNCTION_CALL` is detected (non-streaming). Include error details.
+    - `src/converters.py` (`adapt_vertex_stream_to_openai`): Log `status="failure"`, `stage="gemini_response"` when `MALFORMED_FUNCTION_CALL` is detected (streaming). Include error details.
+    - `src/converters.py` (`convert_vertex_response_to_openai`): Log `status="success"`, `stage="gemini_response"` when a valid `part.function_call` is processed (non-streaming). Include tool name.
+    - `src/converters.py` (`adapt_vertex_stream_to_openai`): Log `status="success"`, `stage="gemini_response"` when a valid `part.function_call` is processed (streaming). Include tool name.
+    - `src/converters.py` (`convert_openai_to_anthropic`): Log `status="success"`, `stage="client_response"` when sending a `ContentBlockToolUse` to the client (non-streaming). Include tool name.
+    - `src/converters.py` (`convert_openai_to_anthropic_sse`): Log `status="success"`, `stage="client_response"` when sending a `content_block_start` for `tool_use` to the client (streaming). Include tool name.
+  - Add `tool_events.jsonl` to the `.gitignore` file.
+- Files: `src/utils.py`, `src/server.py`, `src/converters.py`, `.gitignore`
+- Verification: Run requests that involve successful and (if possible to trigger) failed tool uses. Check that `tool_events.jsonl` is created and contains valid JSON objects on separate lines, reflecting the different stages and statuses of tool usage. Ensure regular logs in the console are not affected.

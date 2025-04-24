@@ -1,13 +1,17 @@
 """Utility functions for logging and formatting.
 
-Provides central logging configuration, color formatting, and request visualization.
+Provides central logging configuration, color formatting, request visualization,
+and specialized tool usage event logging to JSON Lines file.
 """
 
-import logging
+import asyncio
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Dict, List, Literal, Optional, Union
 
+from loguru import logger
 from rich.pretty import pretty_repr
 
 
@@ -27,16 +31,18 @@ class Colors:
 
 
 class LoggerService:
-    """Centralized logging service implementing a singleton pattern.
+    """Centralized logging service implementing a singleton pattern using Loguru.
 
     Provides consistent logging configuration across the application with:
-    - File logging for all levels (DEBUG and up)
-    - Console logging for higher levels (INFO and up)
-    - Synchronized access to prevent configuration conflicts
+    - File logging for all levels (DEBUG and up) with rotation
+    - Console logging with higher levels (INFO or DEBUG)
+    - Timestamped log files for better tracking across runs
+    - Standardized formatting with process, thread, and line information
     """
 
     _instance = None
     _initialized = False
+    _console_handler_id = None
 
     @classmethod
     def get_instance(cls) -> "LoggerService":
@@ -52,8 +58,7 @@ class LoggerService:
     def __init__(self):
         """Initialize the logger configuration.
 
-        Only runs once due to singleton pattern. Subsequent instantiations
-        return without performing initialization again.
+        Only runs once due to singleton pattern. Uses loguru for advanced logging features.
         """
         if LoggerService._initialized:
             return
@@ -62,59 +67,84 @@ class LoggerService:
         logs_dir = Path(__file__).parent.parent / "logs"
         logs_dir.mkdir(exist_ok=True)
 
-        # Configure root logger
-        self.logger = logging.getLogger("claude-code-proxy")
-        self.logger.setLevel(logging.DEBUG)
+        # Create timestamped log filename for this run
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file_pattern = str(logs_dir / f"{timestamp}_proxy.log")
 
-        # Clear any existing handlers (important for streamlit hot-reloading)
-        if self.logger.handlers:
-            self.logger.handlers.clear()
+        # Remove default loguru handler
+        logger.remove()
 
-        # Create file handler for all logs
-        file_handler = logging.FileHandler(logs_dir / "application.log")
-        file_handler.setLevel(logging.DEBUG)
-
-        # Create console handler with higher level
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-
-        # Create formatters and add to handlers
-        file_formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+        # Add file handler with rotation and retention policies
+        logger.add(
+            log_file_pattern,
+            level="DEBUG",
+            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {process}:{thread.name} | {name}:{function}:{line} - {message}",
+            rotation="10 MB",  # Rotate when file reaches 10 MB
+            retention=10,  # Keep up to 10 rotated logs
+            compression="zip",  # Compress rotated logs
+            enqueue=True,  # Use a separate thread for logging (non-blocking)
         )
-        console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-        file_handler.setFormatter(file_formatter)
-        console_handler.setFormatter(console_formatter)
-
-        # Add handlers to logger
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
+        # Add console handler
+        self._console_handler_id = logger.add(
+            sys.stderr,
+            level="INFO",  # Default to INFO level
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level:<8}</level> | <cyan>{name}:{function}:{line}</cyan> - {message}",
+            colorize=True,
+        )
 
         # Mark as initialized
         LoggerService._initialized = True
 
-        self.logger.info("Logger initialized")
+        logger.info("Logger initialized with file: {}", log_file_pattern)
 
-    def get_logger(self) -> logging.Logger:
-        """Get the configured application logger.
+    def get_logger(self):
+        """Get the loguru logger instance.
 
         Returns:
-            logging.Logger: The configured logger with file and console handlers
+            loguru.logger: The configured logger
         """
-        return self.logger
+        return logger
+
+    def enable_debug_logging(self):
+        """Enable debug level logging to console.
+
+        Removes the current console handler and adds a new one with DEBUG level.
+
+        Returns:
+            loguru.logger: The reconfigured logger with debug level enabled
+        """
+        # Remove the current console handler
+        if self._console_handler_id is not None:
+            logger.remove(self._console_handler_id)
+
+        # Add a new console handler with DEBUG level
+        self._console_handler_id = logger.add(
+            sys.stderr,
+            level="DEBUG",
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level:<8}</level> | <cyan>{name}:{function}:{line}</cyan> - {message}",
+            colorize=True,
+        )
+        logger.debug("Debug console logging enabled")
+        return logger
 
 
-def get_logger() -> logging.Logger:
+def get_logger():
     """Get the application-wide configured logger instance.
 
     Returns:
-        logging.Logger: The centrally configured logger
+        loguru.logger: The centrally configured logger
     """
     return LoggerService.get_instance().get_logger()
 
 
-logger = get_logger()
+def enable_debug_logging():
+    """Enable debug level logging to console.
+
+    Returns:
+        loguru.logger: The reconfigured logger with debug level enabled
+    """
+    return LoggerService.get_instance().enable_debug_logging()
 
 
 def log_request_beautifully(method, path, original_model, mapped_model, num_messages, num_tools, status_code):
@@ -154,11 +184,25 @@ def log_request_beautifully(method, path, original_model, mapped_model, num_mess
 
         log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
         model_line = f"  {original_display} → {mapped_display} ({messages_str}, {tools_str})"
+
+        # Print to console
         print(log_line)
         print(model_line)
         sys.stdout.flush()
+
+        # Also log structured information to loguru logger
+        logger.info(
+            "Request processed: {method} {endpoint} - {status_code}",
+            method=method,
+            endpoint=endpoint,
+            status_code=status_code,
+            original_model=original_model,
+            mapped_model=mapped_model,
+            num_messages=num_messages,
+            num_tools=num_tools,
+        )
     except Exception as e:
-        logger.error(f"Error during beautiful logging: {e}")
+        logger.error("Error during beautiful logging: {error}", error=str(e))
         # Fallback to plain log format if colorized version fails
         print(
             f"{method} {path} {status_code} | {original_model} -> {mapped_model} | {num_messages} msgs, {num_tools} tools"
@@ -194,3 +238,69 @@ def proto_to_dict(obj) -> Union[Dict, List[Dict]]:
     # Return other types unchanged
     else:
         return obj
+
+
+# Tool Events Logger for JSONL file
+# Create an asyncio Lock to ensure thread-safe writing to the JSONL file
+_tool_events_lock = asyncio.Lock()
+
+
+async def log_tool_event(
+    request_id: str,
+    tool_name: Optional[str],
+    status: Literal["attempt", "success", "failure"],
+    stage: Literal["gemini_request", "gemini_response", "client_response"],
+    details: Optional[Dict] = None,
+) -> None:
+    """Log tool usage events to a separate JSON Lines file for analysis.
+
+    This function captures structured data about tool usage events at different
+    stages of the request/response cycle, writing events to a timestamped tool_events.jsonl
+    file in a thread-safe manner.
+
+    Args:
+        request_id: The unique identifier for the request
+        tool_name: The name of the tool being used (or None for general events)
+        status: Whether this is an attempt, success, or failure
+        stage: Which part of the process (request to Gemini, response from Gemini, or response to client)
+        details: Optional additional information about the event
+    """
+    try:
+        # Ensure logs directory exists
+        logs_dir = Path(__file__).parent.parent / "logs" / "tool_events"
+        logs_dir.mkdir(exist_ok=True)
+
+        # Create a datestamp for daily tool event files
+        datestamp = datetime.utcnow().strftime("%Y%m%d")
+        jsonl_path = logs_dir / f"{datestamp}_proxy.jsonl"
+
+        # Construct the event object
+        event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "request_id": request_id,
+            "tool_name": tool_name,
+            "status": status,
+            "stage": stage,
+        }
+
+        # Add details if provided
+        if details:
+            event["details"] = details
+
+        # Acquire lock for thread-safe file access
+        async with _tool_events_lock:
+            # Open in append mode and write the JSON object
+            with open(jsonl_path, "a") as f:
+                f.write(json.dumps(event) + "\n")
+
+        # Use loguru's structured logging
+        logger.debug(
+            "Tool event logged: {status} {stage} for {tool}",
+            status=status,
+            stage=stage,
+            tool=tool_name or "unknown",
+            request_id=request_id,
+        )
+    except Exception as e:
+        # Log error but don't fail the request
+        logger.error("Failed to log tool event: {error}", error=str(e), request_id=request_id, exc_info=True)

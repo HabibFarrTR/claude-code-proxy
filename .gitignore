@@ -30,6 +30,10 @@ ENV/
 
 # Logs
 *.log
+logs/*.log
+logs/*_proxy.log*
+logs/tool_events/*_proxy.jsonl
+*.log.zip
 
 # IDE specific files
 .idea/
