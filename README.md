@@ -77,39 +77,6 @@ A specialized, modular proxy server that lets you use Anthropic clients with Tho
 
 3. **That's it!** Your Claude Code client will now use AIplatform models through the proxy. 🎯
 
-#### Easy Installation and Shell Integration
-
-We provide two scripts to make using Claude Code with the proxy easier:
-
-1. **Standalone Installer** - Installs the proxy without needing the full repo:
-
-   ```bash
-   # Get and run the installer
-   curl -s https://raw.githubusercontent.com/YOUR-COMPANY/claude-code-proxy/main/scripts/install.sh | bash
-
-   # Or specify installation directories
-   ./scripts/install.sh --dir ~/apps/claude-proxy --bin ~/bin
-
-   # After installation, you can use:
-   claude-proxy start     # Start the proxy
-   claudex --gemini       # Use Claude with Gemini proxy
-   claudex                # Use Claude with native API
-   ```
-
-2. **Shell Profile Integration** - For switching between providers:
-
-   ```bash
-   # Add to your .bashrc or .zshrc
-   source /path/to/claude-code-proxy/scripts/claude-profile.sh
-
-   # Then you can use these commands:
-   claude-orig            # Use Claude with native API
-   claude-gem             # Use Claude with Gemini proxy
-   proxy-start            # Start the proxy
-   proxy-stop             # Stop the proxy
-   proxy-status           # Check if proxy is running
-   ```
-
 ## Model Mapping 🗺️
 
 The proxy automatically maps Claude models to AIplatform models:
@@ -206,29 +173,6 @@ IMPORTANT: Before running tests, make sure you've run `mltools-cli aws-login` fi
 2. Content blocks (text, tool use, tool results) are flattened to text
 3. Responses from Vertex AI are wrapped in Anthropic-compatible format
 4. For streaming, the proxy simulates Anthropic's server-sent event structure
-
-### Installation Scripts 📦
-
-For easy deployment and usage, we provide two helper scripts:
-
-| Script                    | Purpose                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------ |
-| scripts/install.sh        | Standalone installer that downloads only required files and creates convenient executables |
-| scripts/claude-profile.sh | Shell integration for easy switching between Claude API and Gemini proxy                   |
-
-The installer script:
-
-- Creates a virtual environment
-- Installs only necessary dependencies
-- Downloads required source files
-- Creates command-line tools (`claude-proxy` and `claudex`)
-- Allows you to specify installation directories
-
-The shell profile:
-
-- Provides convenient aliases for using Claude with different backends
-- Allows starting/stopping the proxy server
-- Can be integrated into your shell startup files (.bashrc/.zshrc)
 
 ## Known Limitations 🚫
 
