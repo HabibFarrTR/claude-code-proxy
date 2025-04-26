@@ -1,14 +1,17 @@
 import pytest
+import asyncio
+from unittest.mock import patch, AsyncMock
 
 from src.converters import (
     clean_gemini_schema,
     convert_anthropic_to_openai,
     convert_openai_tools_to_vertex_tools,
+    enhance_tool_description,
 )
 from src.models import MessagesRequest, ToolDefinition, ToolInputSchema
 
 
-def test_clean_gemini_schema_additionalProperties_true():
+def test_clean_gemini_schema_additional_properties_true():
     """Test that additionalProperties: true is properly mapped."""
     test_schema = {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -37,7 +40,7 @@ def test_clean_gemini_schema_additionalProperties_true():
     ), "_additionalProps properties should have a '*' wildcard"
 
 
-def test_clean_gemini_schema_additionalProperties_schema():
+def test_clean_gemini_schema_additional_properties_schema():
     """Test that additionalProperties with a schema is properly mapped."""
     test_schema = {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -68,7 +71,7 @@ def test_clean_gemini_schema_additionalProperties_schema():
     assert "format" not in props["string"], "The 'format' field should be removed for non-supported formats"
 
 
-def test_clean_gemini_schema_additionalProperties_false():
+def test_clean_gemini_schema_additional_properties_false():
     """Test that additionalProperties: false is properly removed."""
     test_schema = {
         "type": "object",
@@ -87,7 +90,7 @@ def test_clean_gemini_schema_additionalProperties_false():
     assert "_additionalProps" not in cleaned["properties"]
 
 
-def test_clean_gemini_schema_nested_additionalProperties():
+def test_clean_gemini_schema_nested_additional_properties():
     """Test that nested additionalProperties are properly handled."""
     test_schema = {
         "type": "object",
@@ -114,7 +117,8 @@ def test_clean_gemini_schema_nested_additionalProperties():
     assert "*" in additional_props["properties"]
 
 
-def test_batch_tool_schema_cleaning():
+@patch('src.converters.log_tool_event', new_callable=AsyncMock)
+def test_batch_tool_schema_cleaning(mock_log_tool_event):
     """Test that BatchTool schema with additionalProperties is properly cleaned."""
     # Simplified version of the BatchTool schema
     batch_tool_schema = {
@@ -161,8 +165,13 @@ def test_batch_tool_schema_cleaning():
         ],
     )
 
-    # Convert to OpenAI format (this will run clean_gemini_schema internally)
-    openAI_format = convert_anthropic_to_openai(anthropic_request)
+    # Need to patch asyncio.create_task in the converters module to avoid the "no running event loop" error
+    with patch("src.converters.asyncio.create_task") as mock_create_task:
+        # Convert to OpenAI format (this will run clean_gemini_schema internally)
+        openAI_format = convert_anthropic_to_openai(anthropic_request)
+        
+        # Verify mock was called
+        assert mock_create_task.called, "asyncio.create_task should have been called"
 
     # Extract the cleaned BatchTool schema
     batch_tool_openai = next(
@@ -211,3 +220,134 @@ def test_batch_tool_schema_cleaning():
 
     except Exception as e:
         pytest.fail(f"Failed to convert BatchTool to Vertex Tool: {e}")
+
+
+def test_enhance_tool_description_batch():
+    """Test that Batch tool description is enhanced with usage examples."""
+    tool_name = "Batch"
+    original_description = "Batch execution tool that runs multiple tool invocations in a single request"
+    schema = {"type": "object", "properties": {}}
+
+    enhanced = enhance_tool_description(tool_name, original_description, schema)
+
+    # Should contain the original description
+    assert original_description in enhanced, "Enhanced description should contain the original description"
+    
+    # Should contain EXAMPLE USAGE section
+    assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
+    
+    # Should contain specific Batch tool examples
+    assert '"description": "Run multiple tools in parallel"' in enhanced
+    assert '"invocations": [' in enhanced
+    assert '"tool_name": "Read"' in enhanced
+    assert '"tool_name": "Grep"' in enhanced
+
+
+def test_enhance_tool_description_edit():
+    """Test that Edit tool description is enhanced with usage examples."""
+    tool_name = "Edit"
+    original_description = "This is a tool for editing files."
+    schema = {"type": "object", "properties": {}}
+
+    enhanced = enhance_tool_description(tool_name, original_description, schema)
+
+    # Should contain the original description
+    assert original_description in enhanced, "Enhanced description should contain the original description"
+    
+    # Should contain EXAMPLE USAGE section
+    assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
+    
+    # Should contain specific Edit tool examples
+    assert '"file_path": "/path/to/file.py"' in enhanced
+    assert '"old_string": "def old_function' in enhanced
+    assert '"new_string": "def old_function' in enhanced
+    assert '"expected_replacements": 1' in enhanced
+
+
+def test_enhance_tool_description_read():
+    """Test that Read tool description is enhanced with usage examples."""
+    tool_name = "Read"
+    original_description = "Reads a file from the local filesystem."
+    schema = {"type": "object", "properties": {}}
+
+    enhanced = enhance_tool_description(tool_name, original_description, schema)
+
+    # Should contain the original description
+    assert original_description in enhanced, "Enhanced description should contain the original description"
+    
+    # Should contain EXAMPLE USAGE section
+    assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
+    
+    # Should contain specific Read tool examples
+    assert '"file_path": "/path/to/file.txt"' in enhanced
+    assert "REQUIRED: Absolute path to the file" in enhanced
+
+
+def test_enhance_tool_description_write():
+    """Test that Write tool description is enhanced with usage examples."""
+    tool_name = "Write"
+    original_description = "Write a file to the local filesystem."
+    schema = {"type": "object", "properties": {}}
+
+    enhanced = enhance_tool_description(tool_name, original_description, schema)
+
+    # Should contain the original description
+    assert original_description in enhanced, "Enhanced description should contain the original description"
+    
+    # Should contain EXAMPLE USAGE section
+    assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
+    
+    # Should contain specific Write tool examples
+    assert '"file_path": "/path/to/file.txt"' in enhanced
+    assert '"content": "Contents to write to the file"' in enhanced
+
+
+def test_enhance_tool_description_glob():
+    """Test that Glob tool description is enhanced with usage examples."""
+    tool_name = "Glob"
+    original_description = "Fast file pattern matching tool"
+    schema = {"type": "object", "properties": {}}
+
+    enhanced = enhance_tool_description(tool_name, original_description, schema)
+
+    # Should contain the original description
+    assert original_description in enhanced, "Enhanced description should contain the original description"
+    
+    # Should contain EXAMPLE USAGE section
+    assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
+    
+    # Should contain specific Glob tool examples
+    assert '"pattern": "**/*.py"' in enhanced
+    assert "REQUIRED: The glob pattern to match files against" in enhanced
+
+
+def test_enhance_tool_description_grep():
+    """Test that Grep tool description is enhanced with usage examples."""
+    tool_name = "Grep"
+    original_description = "Fast content search tool"
+    schema = {"type": "object", "properties": {}}
+
+    enhanced = enhance_tool_description(tool_name, original_description, schema)
+
+    # Should contain the original description
+    assert original_description in enhanced, "Enhanced description should contain the original description"
+    
+    # Should contain EXAMPLE USAGE section
+    assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
+    
+    # Should contain specific Grep tool examples
+    assert '"pattern": "function"' in enhanced
+    assert '"include": "*.py"' in enhanced
+    assert "REQUIRED: The regex pattern to search for" in enhanced
+
+
+def test_enhance_tool_description_unknown_tool():
+    """Test that unknown tool descriptions are not enhanced."""
+    tool_name = "UnknownTool"
+    original_description = "This is an unknown tool"
+    schema = {"type": "object", "properties": {}}
+
+    enhanced = enhance_tool_description(tool_name, original_description, schema)
+
+    # For unknown tools, should return the original description unchanged
+    assert enhanced == original_description, "Unknown tool description should not be modified"

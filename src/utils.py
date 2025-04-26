@@ -249,7 +249,7 @@ async def log_tool_event(
     request_id: str,
     tool_name: Optional[str],
     status: Literal["attempt", "success", "failure"],
-    stage: Literal["gemini_request", "gemini_response", "client_response"],
+    stage: Literal["gemini_request", "gemini_response", "client_response", "client_execution_report"],
     details: Optional[Dict] = None,
 ) -> None:
     """Log tool usage events to a separate JSON Lines file for analysis.

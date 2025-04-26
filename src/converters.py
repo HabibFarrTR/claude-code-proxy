@@ -46,6 +46,110 @@ from src.utils import (
 logger = get_logger()
 
 
+def enhance_tool_description(tool_name: str, original_description: str, schema: Dict) -> str:
+    """
+    Enhance tool descriptions with concrete examples to help Gemini generate proper tool calls.
+
+    This function adds detailed usage examples for tools that have shown high failure rates
+    in client execution reports. Examples are formatted to match the schema structure and
+    highlight required parameters.
+
+    Args:
+        tool_name: The name of the tool
+        original_description: The original tool description
+        schema: The cleaned schema for this tool
+
+    Returns:
+        Enhanced description with appropriate usage examples
+    """
+    enhanced_description = original_description
+
+    # Library of tool examples for problematic tools
+    if tool_name == "Batch":
+        example = (
+            "\n\nEXAMPLE USAGE (Always include the invocations array):\n"
+            "{\n"
+            '  "description": "Run multiple tools in parallel",\n'
+            '  "invocations": [  // REQUIRED: Array of tool invocations to execute\n'
+            "    {\n"
+            '      "tool_name": "Read",  // Name of the tool to invoke\n'
+            '      "input": {  // Parameters for the tool\n'
+            '        "file_path": "/path/to/file.txt"\n'
+            "      }\n"
+            "    },\n"
+            "    {\n"
+            '      "tool_name": "Grep",\n'
+            '      "input": {\n'
+            '        "pattern": "search term",\n'
+            '        "include": "*.py"\n'
+            "      }\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+        enhanced_description += example
+        logger.debug("Enhanced Batch tool description with usage example")
+
+    elif tool_name == "Edit":
+        example = (
+            "\n\nEXAMPLE USAGE:\n"
+            "{\n"
+            '  "file_path": "/path/to/file.py",  // REQUIRED: Absolute path to the file\n'
+            '  "old_string": "def old_function(x, y):\\n    return x + y",  // REQUIRED: Exact text to replace\n'
+            '  "new_string": "def old_function(x, y):\\n    # Add comment\\n    return x + y",  // REQUIRED: New text\n'
+            '  "expected_replacements": 1  // Optional: Number of replacements to perform\n'
+            "}"
+        )
+        enhanced_description += example
+        logger.debug("Enhanced Edit tool description with usage example")
+
+    elif tool_name == "Read":
+        example = (
+            "\n\nEXAMPLE USAGE:\n"
+            "{\n"
+            '  "file_path": "/path/to/file.txt"  // REQUIRED: Absolute path to the file\n'
+            "}"
+        )
+        enhanced_description += example
+        logger.debug("Enhanced Read tool description with usage example")
+
+    elif tool_name == "Write":
+        example = (
+            "\n\nEXAMPLE USAGE:\n"
+            "{\n"
+            '  "file_path": "/path/to/file.txt",  // REQUIRED: Absolute path to the file\n'
+            '  "content": "Contents to write to the file"  // REQUIRED: Content to write\n'
+            "}"
+        )
+        enhanced_description += example
+        logger.debug("Enhanced Write tool description with usage example")
+
+    elif tool_name == "Glob":
+        example = (
+            "\n\nEXAMPLE USAGE:\n"
+            "{\n"
+            '  "pattern": "**/*.py"  // REQUIRED: The glob pattern to match files against\n'
+            "}"
+        )
+        enhanced_description += example
+        logger.debug("Enhanced Glob tool description with usage example")
+
+    elif tool_name == "Grep":
+        example = (
+            "\n\nEXAMPLE USAGE:\n"
+            "{\n"
+            '  "pattern": "function",  // REQUIRED: The regex pattern to search for\n'
+            '  "include": "*.py"  // Optional: File pattern to include in search\n'
+            "}"
+        )
+        enhanced_description += example
+        logger.debug("Enhanced Grep tool description with usage example")
+
+    # Add more tool examples as needed based on failure patterns in logs
+
+    return enhanced_description
+
+
 def convert_anthropic_to_openai(request: MessagesRequest) -> Dict[str, Any]:
     """Convert Anthropic API request to intermediate OpenAI format.
 
@@ -218,12 +322,15 @@ def convert_anthropic_to_openai(request: MessagesRequest) -> Dict[str, Any]:
                 cleaned_schema["properties"] = {}  # Ensure properties key exists
                 logger.debug(f"Added missing empty 'properties' object for tool '{tool.name}'")
 
+            # Enhance description with concrete examples for problematic tools
+            enhanced_description = enhance_tool_description(tool.name, tool.description or "", cleaned_schema)
+
             openai_tools.append(
                 {
                     "type": "function",
                     "function": {
                         "name": tool.name,
-                        "description": tool.description or "",
+                        "description": enhanced_description,
                         "parameters": cleaned_schema,  # Use the cleaned schema
                     },
                 }

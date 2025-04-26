@@ -164,6 +164,80 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
         original_model_name = request_data.original_model_name
         actual_gemini_model_id = request_data.model
 
+        # --- Check for client-side tool execution failures ---
+        for msg in request_data.messages:
+            if msg.role == "user" and isinstance(msg.content, list):
+                for block in msg.content:
+                    if hasattr(block, "type") and block.type == "tool_result":
+                        # Extract tool_use_id which identifies which tool call this is a result for
+                        tool_use_id = getattr(block, "tool_use_id", None)
+
+                        # Check if this is an error response from client-side tool execution
+                        is_error = False
+
+                        # First check the explicit is_error flag if present
+                        if hasattr(block, "is_error") and block.is_error:
+                            is_error = True
+
+                        # Also check content for error indicators
+                        error_content = None
+                        if hasattr(block, "content"):
+                            if isinstance(block.content, dict) and any(
+                                k in block.content for k in ["error", "exception"]
+                            ):
+                                is_error = True
+                                error_content = block.content
+                            elif isinstance(block.content, str) and any(
+                                err in block.content.lower() for err in ["error", "exception", "failed", "invalid"]
+                            ):
+                                is_error = True
+                                error_content = block.content
+                            else:
+                                error_content = block.content
+
+                        if is_error and tool_use_id:
+                            # Try to find the original tool name by looking back through message history
+                            # Start from current message index and search backward for efficiency
+                            tool_name = None
+                            current_msg_idx = request_data.messages.index(msg)
+
+                            # Search backward through message history
+                            for i in range(current_msg_idx - 1, -1, -1):
+                                prev_msg = request_data.messages[i]
+                                if prev_msg.role == "assistant" and isinstance(prev_msg.content, list):
+                                    for prev_block in prev_msg.content:
+                                        if (
+                                            hasattr(prev_block, "type")
+                                            and prev_block.type == "tool_use"
+                                            and hasattr(prev_block, "id")
+                                            and prev_block.id == tool_use_id
+                                        ):
+                                            tool_name = getattr(prev_block, "name", None)
+                                            break
+                                    if tool_name:
+                                        break
+
+                            # Log the client-side tool execution failure
+                            logger.warning(
+                                f"[{request_id}] Client-side tool execution failure detected: "
+                                f"tool_use_id='{tool_use_id}', tool_name='{tool_name or 'unknown'}'"
+                            )
+
+                            # Create async task to log the event
+                            asyncio.create_task(
+                                log_tool_event(
+                                    request_id=request_id,
+                                    tool_name=tool_name,  # May be None if we couldn't find it
+                                    status="failure",
+                                    stage="client_execution_report",
+                                    details={
+                                        "tool_use_id": tool_use_id,
+                                        "error_content": error_content,
+                                        "tool_name_found": bool(tool_name),
+                                    },
+                                )
+                            )
+
         logger.info(
             f"[{request_id}] Processing '/v1/messages': Original='{original_model_name}', Target SDK Model='{actual_gemini_model_id}', Stream={request_data.stream}"
         )
