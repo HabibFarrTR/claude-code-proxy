@@ -1,6 +1,6 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
-import asyncio
-from unittest.mock import patch, AsyncMock
 
 from src.converters import (
     clean_gemini_schema,
@@ -117,7 +117,7 @@ def test_clean_gemini_schema_nested_additional_properties():
     assert "*" in additional_props["properties"]
 
 
-@patch('src.converters.log_tool_event', new_callable=AsyncMock)
+@patch("src.converters.log_tool_event", new_callable=AsyncMock)
 def test_batch_tool_schema_cleaning(mock_log_tool_event):
     """Test that BatchTool schema with additionalProperties is properly cleaned."""
     # Simplified version of the BatchTool schema
@@ -169,7 +169,7 @@ def test_batch_tool_schema_cleaning(mock_log_tool_event):
     with patch("src.converters.asyncio.create_task") as mock_create_task:
         # Convert to OpenAI format (this will run clean_gemini_schema internally)
         openAI_format = convert_anthropic_to_openai(anthropic_request)
-        
+
         # Verify mock was called
         assert mock_create_task.called, "asyncio.create_task should have been called"
 
@@ -232,10 +232,10 @@ def test_enhance_tool_description_batch():
 
     # Should contain the original description
     assert original_description in enhanced, "Enhanced description should contain the original description"
-    
+
     # Should contain EXAMPLE USAGE section
     assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
-    
+
     # Should contain specific Batch tool examples
     assert '"description": "Run multiple tools in parallel"' in enhanced
     assert '"invocations": [' in enhanced
@@ -253,10 +253,10 @@ def test_enhance_tool_description_edit():
 
     # Should contain the original description
     assert original_description in enhanced, "Enhanced description should contain the original description"
-    
+
     # Should contain EXAMPLE USAGE section
     assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
-    
+
     # Should contain specific Edit tool examples
     assert '"file_path": "/path/to/file.py"' in enhanced
     assert '"old_string": "def old_function' in enhanced
@@ -274,10 +274,10 @@ def test_enhance_tool_description_read():
 
     # Should contain the original description
     assert original_description in enhanced, "Enhanced description should contain the original description"
-    
+
     # Should contain EXAMPLE USAGE section
     assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
-    
+
     # Should contain specific Read tool examples
     assert '"file_path": "/path/to/file.txt"' in enhanced
     assert "REQUIRED: Absolute path to the file" in enhanced
@@ -293,10 +293,10 @@ def test_enhance_tool_description_write():
 
     # Should contain the original description
     assert original_description in enhanced, "Enhanced description should contain the original description"
-    
+
     # Should contain EXAMPLE USAGE section
     assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
-    
+
     # Should contain specific Write tool examples
     assert '"file_path": "/path/to/file.txt"' in enhanced
     assert '"content": "Contents to write to the file"' in enhanced
@@ -312,10 +312,10 @@ def test_enhance_tool_description_glob():
 
     # Should contain the original description
     assert original_description in enhanced, "Enhanced description should contain the original description"
-    
+
     # Should contain EXAMPLE USAGE section
     assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
-    
+
     # Should contain specific Glob tool examples
     assert '"pattern": "**/*.py"' in enhanced
     assert "REQUIRED: The glob pattern to match files against" in enhanced
@@ -331,10 +331,10 @@ def test_enhance_tool_description_grep():
 
     # Should contain the original description
     assert original_description in enhanced, "Enhanced description should contain the original description"
-    
+
     # Should contain EXAMPLE USAGE section
     assert "EXAMPLE USAGE" in enhanced, "Enhanced description should contain EXAMPLE USAGE section"
-    
+
     # Should contain specific Grep tool examples
     assert '"pattern": "function"' in enhanced
     assert '"include": "*.py"' in enhanced
