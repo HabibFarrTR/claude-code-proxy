@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Test runner script for the Claude Code Proxy
 # This script starts the server before running tests and cleans up afterward
