@@ -9,7 +9,7 @@ Defines data models for the proxy API, including models for:
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from src.config import GEMINI_BIG_MODEL, GEMINI_SMALL_MODEL
 from src.utils import get_logger
@@ -87,12 +87,15 @@ class MessagesRequest(BaseModel):
     tool_choice: Optional[Dict[str, Any]] = None
     original_model_name: Optional[str] = None  # Internal field to store original name pre-mapping
 
-    @field_validator("model")
-    def validate_and_map_model(cls, v, info):
-        # Store the original model name in the model object before mapping
-        # This ensures we preserve the original Claude model name for later reference
-        info.data["original_model_name"] = v
+    @model_validator(mode='before')
+    def store_original_model(cls, values):
+        # Store the original model name before field validation
+        if isinstance(values, dict) and 'model' in values:
+            values['original_model_name'] = values['model']
+        return values
 
+    @field_validator("model")
+    def validate_and_map_model(cls, v) -> str:
         # Return the mapped Gemini model ID
         mapped_model = map_model_name(v)
         logger.debug(f"Model mapped: '{v}' -> '{mapped_model}'")
@@ -105,12 +108,15 @@ class TokenCountRequest(BaseModel):
     system: Optional[Union[str, List[SystemContent]]] = None
     original_model_name: Optional[str] = None  # Internal field
 
-    @field_validator("model")
-    def validate_and_map_model_token_count(cls, v, info):
-        # Store the original model name in the model object before mapping
-        # This ensures we preserve the original Claude model name for later reference
-        info.data["original_model_name"] = v
+    @model_validator(mode='before')
+    def store_original_model_token_count(cls, values):
+        # Store the original model name before field validation
+        if isinstance(values, dict) and 'model' in values:
+            values['original_model_name'] = values['model']
+        return values
 
+    @field_validator("model")
+    def validate_and_map_model_token_count(cls, v):
         # Return the mapped Gemini model ID
         mapped_model = map_model_name(v)
         logger.debug(f"Token count model mapped: '{v}' -> '{mapped_model}'")
@@ -160,7 +166,7 @@ def map_model_name(anthropic_model_name: str) -> str:
     if clean_name.startswith("anthropic/"):
         clean_name = clean_name[10:]
     elif clean_name.startswith("gemini/"):
-        clean_name = clean_name[7:]  # Allow direct gemini model names like 'gemini/gemini-1.5-pro-latest'
+        clean_name = clean_name[7:]  # Allow direct gemini model names like 'gemini/gemini-2.5-pro-latest'
 
     if "haiku" in clean_name:
         mapped_gemini_model = GEMINI_SMALL_MODEL
@@ -176,5 +182,5 @@ def map_model_name(anthropic_model_name: str) -> str:
             f"Unrecognized Anthropic model name '{original_model}'. Defaulting to BIG model '{mapped_gemini_model}'."
         )
 
-    # Return just the Gemini model ID (e.g., "gemini-1.5-pro-latest") for the SDK
+    # Return just the Gemini model ID (e.g., "gemini-2.5-pro-latest") for the SDK
     return mapped_gemini_model

@@ -239,7 +239,7 @@ async def create_message(request_data: MessagesRequest, raw_request: Request):
                             )
 
         logger.info(
-            f"[{request_id}] Processing '/v1/messages': Original='{original_model_name}', Target SDK Model='{actual_gemini_model_id}', Stream={request_data.stream}"
+            f"[{request_id}] Processing '/v1/messages': original model='{original_model_name}', target model='{actual_gemini_model_id}', Stream={request_data.stream}"
         )
 
         # --- Get credentials from central credential manager ---
@@ -656,7 +656,7 @@ async def count_tokens(request_data: TokenCountRequest, raw_request: Request):
     actual_gemini_model_id = request_data.model  # Contains mapped ID
 
     logger.info(
-        f"[{request_id}] Processing '/v1/messages/count_tokens': Original='{original_model_name}', Target SDK='{actual_gemini_model_id}'"
+        f"[{request_id}] Processing '/v1/messages/count_tokens': original model='{original_model_name}', target model='{actual_gemini_model_id}'"
     )
 
     try:
