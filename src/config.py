@@ -14,8 +14,8 @@ logger = get_logger()
 load_dotenv()
 
 # Model configuration for mapping between Claude and Gemini models
-GEMINI_BIG_MODEL = os.environ.get("BIG_MODEL", "gemini-1.5-pro-latest")
-GEMINI_SMALL_MODEL = os.environ.get("SMALL_MODEL", "gemini-1.5-flash-latest")
+GEMINI_BIG_MODEL = os.environ.get("BIG_MODEL", "gemini-2.5-pro")
+GEMINI_SMALL_MODEL = os.environ.get("SMALL_MODEL", "gemini-2.5-flash")
 logger.info(f"Using BIG model: {GEMINI_BIG_MODEL}, SMALL model: {GEMINI_SMALL_MODEL}")
 
 # Temperature override settings for better tool calling reliability
