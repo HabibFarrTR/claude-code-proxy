@@ -386,6 +386,21 @@ def clean_gemini_schema(schema: Any, path: str = "", modifications: List[Dict] =
                 }
             )
 
+        # Remove numeric constraints that Gemini doesn't support
+        numeric_constraints = ["exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minimum", "maximum"]
+        for constraint in numeric_constraints:
+            if constraint in schema:
+                value = schema.pop(constraint)
+                logger.debug(f"Removing unsupported numeric constraint '{constraint}' with value {value} from schema at path '{current_path}'")
+                modifications.append(
+                    {
+                        "path": f"{current_path}.{constraint}",
+                        "action": "removed",
+                        "value": value,
+                        "reason": f"{constraint} is not supported by Gemini tool parameters",
+                    }
+                )
+
         if "additionalProperties" in schema:
             value = schema["additionalProperties"]
             # If additionalProperties is true, we can map it to a Vertex-compatible format

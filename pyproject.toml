@@ -30,7 +30,6 @@ isort = "6.0.1"
 pytest = "^7.4.0"
 pytest-asyncio = "^0.21.1"
 mypy = "^1.15.0"
-trlabs-mltools-cli = "4.0.0"
 rich = "^14.0.0"
 
 [tool.poetry.scripts]
@@ -52,11 +51,3 @@ build-backend = "poetry.core.masonry.api"
 name = "tr"
 url = "https://tr1.jfrog.io/artifactory/api/pypi/pypi/simple"
 priority = "primary"
-
-[tool.trlabs_mltools_cli.project]
-workspace = "PracticalLawxOhJ"
-work_item = "2138300"
-experiments_dir = "experiments"
-scripts_dir = "scripts"
-applications_dir = "applications"
-usage_pulse_opt_out = true
